@@ -1,0 +1,31 @@
+[package]
+name = "shrinkgate"
+version = "0.1.0"
+edition = "2021"
+description = "ShrinkGate — a local context-shrinking gateway for coding agents (Claude Code, Codex, OpenCode, Muse Code, ...). Linux alternative to ContextShrink Code."
+license = "Apache-2.0"
+repository = "https://github.com/KotalaKishanReddy/shrinkgate"
+readme = "README.md"
+keywords = ["llm", "proxy", "gateway", "context", "coding-agent"]
+categories = ["command-line-utilities", "network-programming"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
+hyper = { version = "1", features = ["client", "server", "http1"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "webpki-roots"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+bytes = "1"
+ring = "0.17"
+clap = { version = "4", features = ["derive", "env"] }
+toml_edit = "0.22"
+anyhow = "1"
+futures-util = "0.3"
+
+[profile.release]
+strip = true
+lto = "fat"
+codegen-units = 1
+opt-level = "z"
+panic = "abort"

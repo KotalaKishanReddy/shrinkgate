@@ -1,0 +1,8 @@
+# Build artifacts
+/target
+
+# Local scratch / editor state
+*.swp
+*.swo
+.idea/
+.vscode/
