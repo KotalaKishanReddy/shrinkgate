@@ -51,7 +51,10 @@ pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkSt
 
     let mut cands: Vec<Cand> = Vec::new();
     for (ii, item) in input.iter().enumerate() {
-        let itype = item.get("type").and_then(Value::as_str).unwrap_or("message");
+        let itype = item
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("message");
         match itype {
             "message" => {
                 let role = item.get("role").and_then(Value::as_str).unwrap_or("");
@@ -180,8 +183,14 @@ mod tests {
         ]});
         let stat = transform(&mut body, &mut s, &c);
         assert_eq!(stat.blocks_stubbed, 1);
-        assert!(body["input"][1]["output"].as_str().unwrap().starts_with("[shrinkgate]"));
-        assert!(body["input"][2]["output"].as_str().unwrap().contains("x-very-long"));
+        assert!(body["input"][1]["output"]
+            .as_str()
+            .unwrap()
+            .starts_with("[shrinkgate]"));
+        assert!(body["input"][2]["output"]
+            .as_str()
+            .unwrap()
+            .contains("x-very-long"));
     }
 
     #[test]

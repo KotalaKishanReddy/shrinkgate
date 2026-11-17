@@ -1,0 +1,49 @@
+name: Bug Report
+description: Create a report to help us fix a bug or unexpected behavior in ShrinkGate
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue! Please ensure you are running the latest version of ShrinkGate.
+  - type: input
+    id: version
+    attributes:
+      label: ShrinkGate Version
+      description: What version of ShrinkGate are you running? (Run `shrinkgate status` or `shrinkgate --version`)
+      placeholder: "e.g. shrinkgate 0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Coding Agent / Client
+      description: Which coding agent is connected through ShrinkGate?
+      placeholder: "e.g. Claude Code, OpenAI Codex, OpenCode, Muse Code, Custom"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Run `shrinkgate connect claude`
+        2. Execute `claude ...`
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs or Error Output
+      description: Output from `shrinkgate status`, terminal logs, or error messages.
+      render: shell

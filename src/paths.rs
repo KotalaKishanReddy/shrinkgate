@@ -2,7 +2,7 @@
 //! `~/.config/shrinkgate` for configuration, `~/.local/state/shrinkgate` for
 //! journals, `~/.local/bin/shrinkgate` for the installed binary.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
@@ -27,7 +27,7 @@ pub fn config_file() -> PathBuf {
     config_dir().join("config.toml")
 }
 
-pub fn usage_file(state: &PathBuf) -> PathBuf {
+pub fn usage_file(state: &Path) -> PathBuf {
     state.join("usage.jsonl")
 }
 
@@ -66,8 +66,7 @@ pub fn bin_install_path() -> PathBuf {
 }
 
 pub fn systemd_unit_path() -> PathBuf {
-    base_dir("XDG_CONFIG_HOME", ".config")
-        .join("systemd/user/shrinkgate.service")
+    base_dir("XDG_CONFIG_HOME", ".config").join("systemd/user/shrinkgate.service")
 }
 
 pub fn expand_tilde(p: &str) -> PathBuf {

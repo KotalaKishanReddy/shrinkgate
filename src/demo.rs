@@ -17,7 +17,9 @@ use crate::server::{serve, AppState};
 use crate::store::Sessions;
 use crate::upstream::make_client;
 
-async fn mock_messages(req: Request<hyper::body::Incoming>) -> Result<Response<crate::upstream::BoxBody>, hyper::Error> {
+async fn mock_messages(
+    req: Request<hyper::body::Incoming>,
+) -> Result<Response<crate::upstream::BoxBody>, hyper::Error> {
     let (_, body) = req.into_parts();
     let bytes = body.collect().await?.to_bytes();
     let n = (bytes.len() / 4) as i64;
@@ -61,9 +63,11 @@ pub async fn run() -> anyhow::Result<()> {
         p
     };
 
-    let mut cfg = Config::default();
-    cfg.port = gateway_port;
-    cfg.upstream_anthropic = format!("http://127.0.0.1:{upstream_port}");
+    let cfg = Config {
+        port: gateway_port,
+        upstream_anthropic: format!("http://127.0.0.1:{upstream_port}"),
+        ..Default::default()
+    };
     let state_dir = std::env::temp_dir().join("shrinkgate-demo");
     let _ = std::fs::remove_dir_all(&state_dir);
     let state = Arc::new(AppState {
@@ -136,7 +140,9 @@ pub async fn run() -> anyhow::Result<()> {
             .header("content-type", "application/json")
             .header("x-api-key", "demo-key")
             .header("anthropic-version", "2023-06-01")
-            .body(crate::upstream::full(Bytes::from(serde_json::to_vec(body)?)))?;
+            .body(crate::upstream::full(Bytes::from(serde_json::to_vec(
+                body,
+            )?)))?;
         let resp = clt.request(req).await?;
         // Drain the SSE stream (gateway taps usage in parallel).
         let mut stream = resp.into_body().into_data_stream();
@@ -163,6 +169,9 @@ pub async fn run() -> anyhow::Result<()> {
         );
     }
     println!("\nTotal estimated savings this demo: −{total_saved} tokens (deterministic stubs, prompt-cache friendly).");
-    println!("Journal: {}", crate::paths::usage_file(&state_dir.to_path_buf()).display());
+    println!(
+        "Journal: {}",
+        crate::paths::usage_file(&state_dir).display()
+    );
     Ok(())
 }

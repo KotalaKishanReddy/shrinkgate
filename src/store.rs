@@ -98,10 +98,7 @@ impl Sessions {
                 None => break,
             }
         }
-        let session = g
-            .map
-            .entry(key.to_string())
-            .or_insert_with(Session::default);
+        let session = g.map.entry(key.to_string()).or_default();
         f(session)
     }
 }
@@ -140,7 +137,8 @@ impl Usage {
             if let Some(n) = get_u64(c, "input_tokens").or_else(|| get_u64(c, "prompt_tokens")) {
                 self.input_tokens = Some(n);
             }
-            if let Some(n) = get_u64(c, "output_tokens").or_else(|| get_u64(c, "completion_tokens")) {
+            if let Some(n) = get_u64(c, "output_tokens").or_else(|| get_u64(c, "completion_tokens"))
+            {
                 self.output_tokens = Some(n);
             }
             if let Some(n) = get_u64(c, "cache_read_input_tokens") {
@@ -150,7 +148,11 @@ impl Usage {
                 self.cache_creation = Some(n);
             }
             for details_key in ["prompt_tokens_details", "input_tokens_details"] {
-                if let Some(n) = c.get(details_key).and_then(|d| d.get("cached_tokens")).and_then(Value::as_u64) {
+                if let Some(n) = c
+                    .get(details_key)
+                    .and_then(|d| d.get("cached_tokens"))
+                    .and_then(Value::as_u64)
+                {
                     self.cache_read = Some(n);
                 }
             }
@@ -208,18 +210,22 @@ impl Record {
 }
 
 pub fn journal(state_dir: &Path, rec: &Record) {
-    let file = crate::paths::usage_file(&state_dir.to_path_buf());
+    let file = crate::paths::usage_file(state_dir);
     if let Some(parent) = file.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&file) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file)
+    {
         let _ = writeln!(f, "{}", rec.to_json());
     }
 }
 
 /// (today_saved_tokens, today_requests, all_saved_tokens, all_requests) in UTC days.
 pub fn totals(state_dir: &Path) -> (u64, u64, u64, u64) {
-    let file = crate::paths::usage_file(&state_dir.to_path_buf());
+    let file = crate::paths::usage_file(state_dir);
     let Ok(text) = std::fs::read_to_string(&file) else {
         return (0, 0, 0, 0);
     };

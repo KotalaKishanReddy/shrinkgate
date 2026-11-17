@@ -7,7 +7,9 @@ use toml_edit::{value, DocumentMut, Item, Table};
 
 use crate::config::Config;
 use crate::paths;
-use crate::wire::{ensure_bin, ensure_engine, now_iso, read_json_file, wire_state_file, write_json_private};
+use crate::wire::{
+    ensure_bin, ensure_engine, now_iso, read_json_file, wire_state_file, write_json_private,
+};
 
 pub const PROVIDER_ID: &str = "shrinkgate_local";
 const START: &str = "# --- ShrinkGate local engine ---";
@@ -41,10 +43,14 @@ pub async fn connect(cfg: &Config, force: bool, env_key: Option<String>) -> anyh
         }
     }
     if doc.get("openai_base_url").is_some() {
-        return Err(refuse("openai_base_url is set; existing proxy routing needs to be resolved first."));
+        return Err(refuse(
+            "openai_base_url is set; existing proxy routing needs to be resolved first.",
+        ));
     }
     if doc.contains_key("profile") || doc.contains_key("profiles") {
-        return Err(refuse("profiles are present; resolve profile routing first."));
+        return Err(refuse(
+            "profiles are present; resolve profile routing first.",
+        ));
     }
 
     doc["model_provider"] = value(PROVIDER_ID);
@@ -64,7 +70,7 @@ pub async fn connect(cfg: &Config, force: bool, env_key: Option<String>) -> anyh
         }
     }
     doc["model_providers"][PROVIDER_ID] = Item::Table(t);
-    let written = format!("{START}\n{}{END}\n", doc.to_string());
+    let written = format!("{START}\n{doc}{END}\n");
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -82,9 +88,14 @@ pub async fn connect(cfg: &Config, force: bool, env_key: Option<String>) -> anyh
         }),
     )?;
 
-    println!("Connected. Codex now sends its Responses-API requests through ShrinkGate ({}).", cfg.engine_url());
+    println!(
+        "Connected. Codex now sends its Responses-API requests through ShrinkGate ({}).",
+        cfg.engine_url()
+    );
     if env_key.is_none() {
-        println!("Your ChatGPT sign-in is unchanged; ShrinkGate forwards it to the ChatGPT backend.");
+        println!(
+            "Your ChatGPT sign-in is unchanged; ShrinkGate forwards it to the ChatGPT backend."
+        );
     } else {
         println!("Set the key environment variable before launching codex.");
     }
@@ -99,10 +110,16 @@ pub fn status() -> String {
     };
     match std::fs::read_to_string(&path) {
         Ok(cur) if cur == state.get("written").and_then(|v| v.as_str()).unwrap_or("") => {
-            let base = state.get("engine_url").and_then(|v| v.as_str()).unwrap_or("?");
+            let base = state
+                .get("engine_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             format!("codex: connected through the ShrinkGate engine at {base}")
         }
-        Ok(_) => "codex: config.toml changed since connect; run `shrinkgate uninstall codex` to restore".into(),
+        Ok(_) => {
+            "codex: config.toml changed since connect; run `shrinkgate uninstall codex` to restore"
+                .into()
+        }
         Err(_) => "codex: config.toml missing".into(),
     }
 }
@@ -115,7 +132,10 @@ pub fn uninstall() -> anyhow::Result<bool> {
     };
     let path = config_path();
     let written = state.get("written").and_then(|v| v.as_str()).unwrap_or("");
-    let original = state.get("original").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let original = state
+        .get("original")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let cur = std::fs::read_to_string(&path).unwrap_or_default();
     if cur != written {
         println!("Codex routing changed since connect. Files kept; resolve the managed provider before retrying.");

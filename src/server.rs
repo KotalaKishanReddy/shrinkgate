@@ -7,8 +7,8 @@
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
-use hyper::http::request::Parts;
 use hyper::header::{HeaderValue, CONTENT_LENGTH, CONTENT_TYPE};
+use hyper::http::request::Parts;
 use hyper::service::service_fn;
 use hyper::{HeaderMap, Method, Request, Response, Uri};
 use hyper_util::rt::TokioIo;
@@ -21,7 +21,9 @@ use tokio::net::TcpListener;
 
 use crate::config::Config;
 use crate::paths;
-use crate::shrink::{anthropic as sh_anthropic, openai as sh_openai, responses as sh_responses, ShrinkStat};
+use crate::shrink::{
+    anthropic as sh_anthropic, openai as sh_openai, responses as sh_responses, ShrinkStat,
+};
 use crate::store::{journal, usage_from_json, Record, Sessions, Usage};
 use crate::upstream::{
     forward_req_headers, forward_resp_headers, full, hyper_stream, make_client, BoxBody, BoxError,
@@ -83,8 +85,13 @@ pub async fn serve(listener: TcpListener, state: St) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle(req: Request<Incoming>, st: St) -> Result<Response<BoxBody>, std::convert::Infallible> {
-    Ok(route(req, st).await.unwrap_or_else(|e| error_json(502, &e.to_string())))
+async fn handle(
+    req: Request<Incoming>,
+    st: St,
+) -> Result<Response<BoxBody>, std::convert::Infallible> {
+    Ok(route(req, st)
+        .await
+        .unwrap_or_else(|e| error_json(502, &e.to_string())))
 }
 
 fn error_json(status: u16, msg: &str) -> Response<BoxBody> {
@@ -103,7 +110,9 @@ async fn route(req: Request<Incoming>, st: St) -> Result<Response<BoxBody>, BoxE
     match (&method, path.as_str()) {
         (&Method::GET, "/healthz") | (&Method::GET, "/__cs/health") => Ok(health(&st)),
         (&Method::POST, "/v1/messages") => messages(parts, body, st, "messages").await,
-        (&Method::POST, "/v1/messages/count_tokens") => messages(parts, body, st, "count_tokens").await,
+        (&Method::POST, "/v1/messages/count_tokens") => {
+            messages(parts, body, st, "count_tokens").await
+        }
         (&Method::POST, "/v1/chat/completions") => chat_completions(parts, body, st).await,
         (&Method::POST, "/v1/responses") => responses(parts, body, st).await,
         _ => passthrough(parts, body, st).await,
@@ -130,7 +139,11 @@ fn health(st: &St) -> Response<BoxBody> {
 // ---------------------------------------------------------------------------
 
 fn path_and_query(parts: &Parts) -> String {
-    let pq = parts.uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("");
+    let pq = parts
+        .uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("");
     pq.to_string()
 }
 
@@ -165,7 +178,11 @@ fn build_upstream_request(
 }
 
 /// Builds a passthrough request that streams the client's body onward.
-fn build_stream_request(parts: &Parts, url: String, body: BoxBody) -> Result<Request<BoxBody>, BoxError> {
+fn build_stream_request(
+    parts: &Parts,
+    url: String,
+    body: BoxBody,
+) -> Result<Request<BoxBody>, BoxError> {
     let uri: Uri = url.parse().map_err(|e| Box::new(e) as BoxError)?;
     let headers = forward_req_headers(&parts.headers, false);
     let mut b = Request::builder().method(parts.method.clone()).uri(uri);
@@ -259,8 +276,7 @@ async fn send_transformed(
             }
             hm.insert(CONTENT_LENGTH, HeaderValue::from(bytes.len()));
         }
-        rb.body(full(bytes))
-            .map_err(|e| Box::new(e) as BoxError)
+        rb.body(full(bytes)).map_err(|e| Box::new(e) as BoxError)
     }
 }
 
@@ -276,7 +292,12 @@ fn anthropic_base(st: &St, parts: &Parts) -> String {
     }
 }
 
-async fn messages(parts: Parts, body: Incoming, st: St, route: &'static str) -> Result<Response<BoxBody>, BoxError> {
+async fn messages(
+    parts: Parts,
+    body: Incoming,
+    st: St,
+    route: &'static str,
+) -> Result<Response<BoxBody>, BoxError> {
     let bytes = body.collect().await?.to_bytes();
     if bytes.len() > MAX_BODY {
         return Err("request body exceeded the ShrinkGate limit".into());
@@ -292,8 +313,17 @@ async fn messages(parts: Parts, body: Incoming, st: St, route: &'static str) -> 
             .with_session(&session, |sess| sh_anthropic::transform(&mut v, sess, &cfg));
     }
     let out = serde_json::to_vec(&v)?;
-    let url = format!("{}{}", anthropic_base(&st, &parts).trim_end_matches('/'), path_and_query(&parts));
-    let pending = Pending { route, session, stat, started: Instant::now() };
+    let url = format!(
+        "{}{}",
+        anthropic_base(&st, &parts).trim_end_matches('/'),
+        path_and_query(&parts)
+    );
+    let pending = Pending {
+        route,
+        session,
+        stat,
+        started: Instant::now(),
+    };
     send_transformed(&st, parts, url, out, pending).await
 }
 
@@ -306,7 +336,11 @@ fn openai_base(st: &St, parts: &Parts) -> String {
     }
 }
 
-async fn chat_completions(parts: Parts, body: Incoming, st: St) -> Result<Response<BoxBody>, BoxError> {
+async fn chat_completions(
+    parts: Parts,
+    body: Incoming,
+    st: St,
+) -> Result<Response<BoxBody>, BoxError> {
     let bytes = body.collect().await?.to_bytes();
     if bytes.len() > MAX_BODY {
         return Err("request body exceeded the ShrinkGate limit".into());
@@ -322,8 +356,17 @@ async fn chat_completions(parts: Parts, body: Incoming, st: St) -> Result<Respon
             .with_session(&session, |sess| sh_openai::transform(&mut v, sess, &cfg));
     }
     let out = serde_json::to_vec(&v)?;
-    let url = format!("{}{}", openai_base(&st, &parts).trim_end_matches('/'), path_and_query(&parts));
-    let pending = Pending { route: "chat", session, stat, started: Instant::now() };
+    let url = format!(
+        "{}{}",
+        openai_base(&st, &parts).trim_end_matches('/'),
+        path_and_query(&parts)
+    );
+    let pending = Pending {
+        route: "chat",
+        session,
+        stat,
+        started: Instant::now(),
+    };
     send_transformed(&st, parts, url, out, pending).await
 }
 
@@ -342,7 +385,10 @@ fn responses_upstream(st: &St, parts: &Parts) -> (String, String) {
         .unwrap_or(false);
     let chatgpt = parts.headers.contains_key("chatgpt-account-id") || jwt;
     if chatgpt {
-        return (st.cfg.upstream_chatgpt.trim_end_matches('/').to_string(), "chatgpt".into());
+        return (
+            st.cfg.upstream_chatgpt.trim_end_matches('/').to_string(),
+            "chatgpt".into(),
+        );
     }
     (openai_base(st, parts), "openai".into())
 }
@@ -365,9 +411,18 @@ async fn responses(parts: Parts, body: Incoming, st: St) -> Result<Response<BoxB
     let out = serde_json::to_vec(&v)?;
     let (base, name) = responses_upstream(&st, &parts);
     let pq = path_and_query(&parts);
-    let path = if name == "chatgpt" { strip_v1(&pq).to_string() } else { pq };
+    let path = if name == "chatgpt" {
+        strip_v1(&pq).to_string()
+    } else {
+        pq
+    };
     let url = format!("{}{}", base, path);
-    let pending = Pending { route: "responses", session, stat, started: Instant::now() };
+    let pending = Pending {
+        route: "responses",
+        session,
+        stat,
+        started: Instant::now(),
+    };
     send_transformed(&st, parts, url, out, pending).await
 }
 
@@ -380,11 +435,7 @@ async fn passthrough(parts: Parts, body: Incoming, st: St) -> Result<Response<Bo
         st.cfg.upstream_opencode.clone()
     } else if path.starts_with("/v1/messages") || path.starts_with("/v1/complete") {
         anthropic_base(&st, &parts)
-    } else if parts
-        .headers
-        .contains_key("chatgpt-account-id")
-        && path.starts_with("/v1/")
-    {
+    } else if parts.headers.contains_key("chatgpt-account-id") && path.starts_with("/v1/") {
         st.cfg.upstream_chatgpt.clone()
     } else {
         match st.cfg.default_upstream.as_str() {
@@ -395,7 +446,11 @@ async fn passthrough(parts: Parts, body: Incoming, st: St) -> Result<Response<Bo
         }
     };
     let pq = path_and_query(&parts);
-    let path = if base == st.cfg.upstream_chatgpt { strip_v1(&pq).to_string() } else { pq };
+    let path = if base == st.cfg.upstream_chatgpt {
+        strip_v1(&pq).to_string()
+    } else {
+        pq
+    };
     let url = format!("{}{}", base.trim_end_matches('/'), path);
     let req = build_stream_request(&parts, url, hyper_stream(body.into_data_stream()))?;
     let resp = st.clt.request(req).await.map_err(|e| {

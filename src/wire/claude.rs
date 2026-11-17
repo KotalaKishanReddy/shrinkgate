@@ -62,16 +62,18 @@ pub async fn connect(
         Err(_) => json!({}),
     };
 
-    let base_now = lookup(&settings, BASE_URL_KEY).and_then(Value::as_str).unwrap_or("");
-    if !base_now.is_empty() && !is_our_url(base_now, &ours) && base_now != "https://api.anthropic.com" {
-        if !force {
-            return Err(refuse(
-                &format!(
-                    "ANTHROPIC_BASE_URL already points at {base_now}, another gateway. \
-                     Remove it, or add --force to replace it (uninstall restores the old value)."
-                ),
-            ));
-        }
+    let base_now = lookup(&settings, BASE_URL_KEY)
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !base_now.is_empty()
+        && !is_our_url(base_now, &ours)
+        && base_now != "https://api.anthropic.com"
+        && !force
+    {
+        return Err(refuse(&format!(
+            "ANTHROPIC_BASE_URL already points at {base_now}, another gateway. \
+                 Remove it, or add --force to replace it (uninstall restores the old value)."
+        )));
     }
     if lookup(&settings, "env.ANTHROPIC_CUSTOM_HEADERS")
         .and_then(Value::as_str)
@@ -88,11 +90,13 @@ pub async fn connect(
     let mut written = serde_json::Map::new();
     let mut previous = serde_json::Map::new();
     {
-        let mut record =
-            |key: &str, value: Value| {
-                previous.insert(key.to_string(), lookup(&settings, key).cloned().unwrap_or(Value::Null));
-                written.insert(key.to_string(), value);
-            };
+        let mut record = |key: &str, value: Value| {
+            previous.insert(
+                key.to_string(),
+                lookup(&settings, key).cloned().unwrap_or(Value::Null),
+            );
+            written.insert(key.to_string(), value);
+        };
         record(BASE_URL_KEY, Value::String(ours.clone()));
         if lookup(&settings, TOOL_SEARCH_KEY).is_none() {
             record(TOOL_SEARCH_KEY, Value::String("true".into()));
@@ -117,7 +121,11 @@ pub async fn connect(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if !session_start.iter().any(|e| serde_json::to_string(e).map(|s| s == entry_json).unwrap_or(false)) {
+    if !session_start.iter().any(|e| {
+        serde_json::to_string(e)
+            .map(|s| s == entry_json)
+            .unwrap_or(false)
+    }) {
         session_start.push(hook_entry.clone());
     }
 
@@ -132,7 +140,11 @@ pub async fn connect(
     if let Some(v) = written.get("statusLine") {
         set_path(&mut settings, "statusLine", v.clone());
     }
-    set_path(&mut settings, "hooks.SessionStart", Value::Array(session_start));
+    set_path(
+        &mut settings,
+        "hooks.SessionStart",
+        Value::Array(session_start),
+    );
 
     // Persist state first, then settings (mirrors the original's ordering).
     let state = json!({
@@ -155,12 +167,12 @@ pub async fn connect(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(
-        &path,
-        serde_json::to_string_pretty(&settings)? + "\n",
-    )?;
+    std::fs::write(&path, serde_json::to_string_pretty(&settings)? + "\n")?;
 
-    println!("Connected. Claude Code now sends its requests through ShrinkGate on this computer ({}).", ours);
+    println!(
+        "Connected. Claude Code now sends its requests through ShrinkGate on this computer ({}).",
+        ours
+    );
     if !service_used && !no_service {
         println!("systemd user service unavailable; the SessionStart hook keeps the engine running instead.");
     }
@@ -177,23 +189,33 @@ pub fn status(cfg: &Config) -> String {
     let mut lines = Vec::new();
     match std::fs::read_to_string(&path)
         .ok()
-        .map(|t| serde_json::from_str::<Value>(&t).ok())
-        .flatten()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
     {
         Some(settings) => {
-            let base = lookup(&settings, BASE_URL_KEY).and_then(Value::as_str).unwrap_or("");
+            let base = lookup(&settings, BASE_URL_KEY)
+                .and_then(Value::as_str)
+                .unwrap_or("");
             match &state {
-                Some(st) if lookup(&settings, BASE_URL_KEY) == st.get("written").and_then(|w| w.get(BASE_URL_KEY)) => {
-                    lines.push(format!("claude: connected through the ShrinkGate engine at {base}"));
+                Some(st)
+                    if lookup(&settings, BASE_URL_KEY)
+                        == st.get("written").and_then(|w| w.get(BASE_URL_KEY)) =>
+                {
+                    lines.push(format!(
+                        "claude: connected through the ShrinkGate engine at {base}"
+                    ));
                 }
                 Some(_) => {
                     lines.push("claude: settings.json no longer matches what ShrinkGate wrote. Run `shrinkgate uninstall claude` to restore.".into());
                 }
                 None if !base.is_empty() && is_our_url(base, &cfg.engine_url()) => {
-                    lines.push(format!("claude: ANTHROPIC_BASE_URL points at {base} (not connected by ShrinkGate)"));
+                    lines.push(format!(
+                        "claude: ANTHROPIC_BASE_URL points at {base} (not connected by ShrinkGate)"
+                    ));
                 }
                 None if !base.is_empty() => {
-                    lines.push(format!("claude: ANTHROPIC_BASE_URL points at {base} (not ShrinkGate)"));
+                    lines.push(format!(
+                        "claude: ANTHROPIC_BASE_URL points at {base} (not ShrinkGate)"
+                    ));
                 }
                 None => lines.push("claude: not connected (no ANTHROPIC_BASE_URL)".into()),
             }
@@ -202,9 +224,15 @@ pub fn status(cfg: &Config) -> String {
     }
     if let Some(st) = &state {
         if st.get("lean").and_then(Value::as_bool).unwrap_or(false) {
-            lines.push(format!("claude: keep sessions lean on (auto-compact window {LEAN_WINDOW})"));
+            lines.push(format!(
+                "claude: keep sessions lean on (auto-compact window {LEAN_WINDOW})"
+            ));
         }
-        if st.get("statusline").and_then(Value::as_bool).unwrap_or(false) {
+        if st
+            .get("statusline")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
             lines.push("claude: statusline wired".into());
         }
     }
@@ -220,8 +248,7 @@ pub fn uninstall(_cfg: &Config, purge: bool) -> anyhow::Result<bool> {
     let path = settings_path();
     let mut settings = match std::fs::read_to_string(&path)
         .ok()
-        .map(|t| serde_json::from_str::<Value>(&t).ok())
-        .flatten()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
     {
         Some(v) => v,
         None => {
@@ -235,9 +262,14 @@ pub fn uninstall(_cfg: &Config, purge: bool) -> anyhow::Result<bool> {
 
     // Remove our SessionStart hook entry, whatever the state says.
     if let Some(entry) = state.pointer("/hook/entry") {
-        if let Some(arr) = lookup_mut(&mut settings, "hooks.SessionStart").and_then(Value::as_array_mut) {
+        if let Some(arr) =
+            lookup_mut(&mut settings, "hooks.SessionStart").and_then(Value::as_array_mut)
+        {
             let before = arr.len();
-            arr.retain(|e| serde_json::to_string(e).ok().as_deref() != serde_json::to_string(entry).ok().as_deref());
+            arr.retain(|e| {
+                serde_json::to_string(e).ok().as_deref()
+                    != serde_json::to_string(entry).ok().as_deref()
+            });
             if arr.len() == before {
                 leftovers.push("hooks.SessionStart (entry not found)".into());
             }
@@ -305,7 +337,14 @@ pub fn lean(action: &str, force: bool) -> anyhow::Result<i32> {
                     let wired = read_json_file(&state_file)
                         .map(|s| s.get("lean").and_then(Value::as_bool).unwrap_or(false))
                         .unwrap_or(false);
-                    println!("lean: on{} ({LEAN_WINDOW} tokens)", if wired { "" } else { " (set outside ShrinkGate)" });
+                    println!(
+                        "lean: on{} ({LEAN_WINDOW} tokens)",
+                        if wired {
+                            ""
+                        } else {
+                            " (set outside ShrinkGate)"
+                        }
+                    );
                 }
                 Some(other) => println!("lean: window set to {other:?} outside ShrinkGate (kept)"),
                 None => println!("lean: off (no window set)"),
@@ -323,7 +362,9 @@ pub fn lean(action: &str, force: bool) -> anyhow::Result<i32> {
                 "connected_at": now_iso(),
             }));
             if action == "on" {
-                let cur = lookup(&settings, LEAN_KEY).and_then(Value::as_str).unwrap_or("");
+                let cur = lookup(&settings, LEAN_KEY)
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 if !cur.is_empty() && cur != LEAN_WINDOW && !force {
                     return Err(refuse(
                         "CLAUDE_CODE_AUTO_COMPACT_WINDOW is set to your own value; add --force to replace it",
@@ -383,6 +424,8 @@ pub fn lean(action: &str, force: bool) -> anyhow::Result<i32> {
             }
             Ok(0)
         }
-        _ => Err(anyhow::anyhow!("unknown lean action: {action} (use on|off|status)")),
+        _ => Err(anyhow::anyhow!(
+            "unknown lean action: {action} (use on|off|status)"
+        )),
     }
 }

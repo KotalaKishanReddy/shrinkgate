@@ -168,9 +168,18 @@ mod tests {
         let stat = transform(&mut body, &mut s, &c);
         // Only the two user copies count: earlier stubbed, system rows intact.
         assert_eq!(stat.blocks_stubbed, 1);
-        assert!(body["messages"][0]["content"].as_str().unwrap().contains("x-very-long"));
-        assert!(body["messages"][1]["content"].as_str().unwrap().contains("x-very-long"));
-        assert!(body["messages"][2]["content"].as_str().unwrap().starts_with("[shrinkgate]"));
+        assert!(body["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("x-very-long"));
+        assert!(body["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("x-very-long"));
+        assert!(body["messages"][2]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("[shrinkgate]"));
     }
 
     #[test]

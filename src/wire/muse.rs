@@ -22,7 +22,9 @@ fn muse_installed() -> bool {
 
 pub async fn connect(cfg: &Config) -> anyhow::Result<()> {
     if !ensure_engine(cfg).await? {
-        return Err(anyhow::anyhow!("the ShrinkGate engine did not start. Nothing was changed."));
+        return Err(anyhow::anyhow!(
+            "the ShrinkGate engine did not start. Nothing was changed."
+        ));
     }
     let env_file = paths::config_dir().join("muse.env");
     if let Some(parent) = env_file.parent() {
@@ -41,13 +43,19 @@ pub async fn connect(cfg: &Config) -> anyhow::Result<()> {
             meta = cfg.upstream_meta,
         ),
     )?;
-    println!("Wrote {}. ShrinkGate's Muse upstream is {}.", env_file.display(), cfg.upstream_meta);
+    println!(
+        "Wrote {}. ShrinkGate's Muse upstream is {}.",
+        env_file.display(),
+        cfg.upstream_meta
+    );
     if muse_installed() {
         println!("muse found on PATH.");
     } else {
         println!("muse was not found on PATH; install it first (Meta ships it as a binary).");
     }
-    println!("Note: Muse Code has no official provider override; the --base-url route is best-effort.");
+    println!(
+        "Note: Muse Code has no official provider override; the --base-url route is best-effort."
+    );
     Ok(())
 }
 

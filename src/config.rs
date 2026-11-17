@@ -58,7 +58,7 @@ impl Config {
                 cfg.port = doc
                     .get("port")
                     .and_then(|i| i.as_integer())
-                    .map(|v| v as u16)
+                    .and_then(|v| u16::try_from(v).ok())
                     .unwrap_or(cfg.port);
                 cfg.shrink = doc
                     .get("shrink")

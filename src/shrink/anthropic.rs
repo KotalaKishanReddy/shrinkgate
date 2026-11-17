@@ -279,12 +279,20 @@ mod tests {
         // candidates at all; the plain copy at the end has no duplicate here.
         assert_eq!(stat.blocks_stubbed, 0);
         // Nothing inside those protected shapes changed.
-        let media = body["messages"][0]["content"][0]["content"].as_array().unwrap();
+        let media = body["messages"][0]["content"][0]["content"]
+            .as_array()
+            .unwrap();
         assert!(media[1]["source"]["data"].as_str().unwrap() == "AAAA");
         let th = &body["messages"][1]["content"][0];
-        assert!(th["thinking"].as_str().unwrap().contains("x-very-long-reasoning"));
+        assert!(th["thinking"]
+            .as_str()
+            .unwrap()
+            .contains("x-very-long-reasoning"));
         let tu = &body["messages"][1]["content"][1];
-        assert!(tu["input"]["cmd"].as_str().unwrap().contains("x-very-long-command"));
+        assert!(tu["input"]["cmd"]
+            .as_str()
+            .unwrap()
+            .contains("x-very-long-command"));
     }
 
     #[test]

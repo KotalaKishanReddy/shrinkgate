@@ -7,7 +7,9 @@ use serde_json::{json, Value};
 
 use crate::config::Config;
 use crate::paths;
-use crate::wire::{ensure_bin, ensure_engine, now_iso, read_json_file, wire_state_file, write_json_private};
+use crate::wire::{
+    ensure_bin, ensure_engine, now_iso, read_json_file, wire_state_file, write_json_private,
+};
 
 fn refuse(msg: &str) -> anyhow::Error {
     anyhow::anyhow!("{msg} No settings were changed.")
@@ -74,7 +76,9 @@ pub async fn connect(cfg: &Config, force: bool) -> anyhow::Result<()> {
     let path = config_path();
     let original = std::fs::read_to_string(&path).ok();
     let mut doc: Value = match &original {
-        Some(text) => serde_json::from_str(text).map_err(|_| refuse("opencode.json is not valid JSON"))?,
+        Some(text) => {
+            serde_json::from_str(text).map_err(|_| refuse("opencode.json is not valid JSON"))?
+        }
         None => json!({"$schema": "https://opencode.ai/config.json"}),
     };
     if !doc.is_object() {
@@ -91,8 +95,13 @@ pub async fn connect(cfg: &Config, force: bool) -> anyhow::Result<()> {
         .get(provider_key)
         .and_then(|p| p.get("shrinkgate"))
         .cloned();
-    if existing.is_some() && !force && existing != Some(provider_block(cfg).get("shrinkgate").unwrap().clone()) {
-        return Err(refuse("a shrinkgate provider already exists with different settings (use --force to replace)"));
+    if existing.is_some()
+        && !force
+        && existing != Some(provider_block(cfg).get("shrinkgate").unwrap().clone())
+    {
+        return Err(refuse(
+            "a shrinkgate provider already exists with different settings (use --force to replace)",
+        ));
     }
     let block = provider_block(cfg);
     let providers = doc
@@ -101,7 +110,10 @@ pub async fn connect(cfg: &Config, force: bool) -> anyhow::Result<()> {
         .entry(provider_key.to_string())
         .or_insert(json!({}));
     for (k, v) in block.as_object().unwrap() {
-        providers.as_object_mut().unwrap().insert(k.clone(), v.clone());
+        providers
+            .as_object_mut()
+            .unwrap()
+            .insert(k.clone(), v.clone());
     }
     let written = serde_json::to_string_pretty(&doc)? + "\n";
     if let Some(parent) = path.parent() {
@@ -119,8 +131,13 @@ pub async fn connect(cfg: &Config, force: bool) -> anyhow::Result<()> {
         }),
     )?;
 
-    println!("Connected. OpenCode now offers ShrinkGate providers through the local engine ({}).", cfg.engine_url());
-    println!("Pick a model like shrinkgate/claude-sonnet-4-5, or store keys via `opencode auth login`.");
+    println!(
+        "Connected. OpenCode now offers ShrinkGate providers through the local engine ({}).",
+        cfg.engine_url()
+    );
+    println!(
+        "Pick a model like shrinkgate/claude-sonnet-4-5, or store keys via `opencode auth login`."
+    );
     println!("Add more model IDs under models in opencode.json as needed. Restart OpenCode.");
     Ok(())
 }
@@ -147,7 +164,10 @@ pub fn uninstall() -> anyhow::Result<bool> {
     };
     let path = config_path();
     let written = state.get("written").and_then(|v| v.as_str()).unwrap_or("");
-    let original = state.get("original").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let original = state
+        .get("original")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let cur = std::fs::read_to_string(&path).unwrap_or_default();
     if cur != written {
         println!("OpenCode config changed since connect. Files kept; retry after resolving.");

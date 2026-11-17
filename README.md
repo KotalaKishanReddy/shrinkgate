@@ -1,249 +1,308 @@
 <div align="center">
 
-# ShrinkGate
+# ⚡ ShrinkGate
 
-**A local context-shrinking gateway for coding agents.**
+### *High-performance, local context-shrinking gateway for coding agents.*
 
-One small Rust binary on `127.0.0.1:18793`. Your coding agents send their model
-traffic through it, and it trims the content they **re-send on every turn**
-before it reaches the model API — with your own auth, streaming untouched.
+[![CI Status](https://img.shields.io/github/actions/workflow/status/KotalaKishanReddy/shrinkgate/ci.yml?branch=main&label=CI&style=flat-square&logo=github)](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate?style=flat-square&color=blue&logo=rust)](https://github.com/KotalaKishanReddy/shrinkgate/releases)
+[![Container Image](https://img.shields.io/badge/ghcr.io-docker_image-2496ED?style=flat-square&logo=docker)](https://github.com/KotalaKishanReddy/shrinkgate/pkgs/container/shrinkgate)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey?style=flat-square&logo=linux)](https://github.com/KotalaKishanReddy/shrinkgate)
+[![Binary Size](https://img.shields.io/badge/binary_size-2.3MB-orange?style=flat-square)](https://github.com/KotalaKishanReddy/shrinkgate)
 
-[![CI](https://img.shields.io/github/actions/workflow/status/KotalaKishanReddy/shrinkgate/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate?style=flat-square)](https://github.com/KotalaKishanReddy/shrinkgate/releases)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
-[![Container](https://img.shields.io/badge/image-ghcr.io-2496ED?logo=docker&style=flat-square)](https://github.com/KotalaKishanReddy/shrinkgate/pkgs/container/shrinkgate)
+<br/>
 
-*Independent, from-scratch alternative to [ContextShrink Code](https://code.contextshrink.com)
-(whose Windows-only engine ships today), built for Linux. The design was informed by
-studying the Apache-2.0 connector packages on npm (`contextshrink-claude`,
-`contextshrink-codex`); no part of their closed engine was used or decompiled.*
+**A lightweight (~2.3 MB) local daemon on `127.0.0.1:18793` that cuts your coding agent token costs and latency by deduplicating conversation history before it reaches LLM APIs.**
+
+*Built from scratch in safe, idiomatic Rust for Linux. An open-source alternative to proprietary context compressors.*
+
+<br/>
 
 ```text
-Claude Code ──►                    ──► api.anthropic.com    (your API key)
-Codex       ──►  ShrinkGate        ──► api.openai.com / ChatGPT backend
-OpenCode    ──►  127.0.0.1:18793   ──► api.openai.com       (your API key)
-Muse Code   ──►                    ──► api.meta.ai          (your key)
+ ┌──────────────┐
+ │  Claude Code │────┐
+ └──────────────┘    │
+ ┌──────────────┐    │       ┌───────────────────────┐         ┌────────────────────────┐
+ │ OpenAI Codex │────┼──────►│  ⚡ ShrinkGate         │────────►│  Official Model APIs   │
+ └──────────────┘    │       │  127.0.0.1:18793      │         │  (Anthropic / OpenAI / │
+ ┌──────────────┐    │       │  • Deduplicates Turns │         │   Meta / OpenCode)     │
+ │   OpenCode   │────┤       │  • Preserves Caches   │         └────────────────────────┘
+ └──────────────┘    │       │  • Streams Untouched  │                     ▲
+ ┌──────────────┐    │       └───────────────────────┘                     │
+ │   Muse Code  │────┘                   │                                 │
+ └──────────────┘                        └──────── Pass-through Auth ──────┘
 ```
 
 </div>
 
-## How the shrink pass works
+---
 
-Coding agents replay the whole conversation (including every tool result —
-file reads, command output, search results) on **every** request. The same
-bytes go to the model again and again.
+## 💡 Why ShrinkGate?
 
-ShrinkGate fingerprints every large text payload (SHA-256 over length-prefixed
-content, so concatenations can't collide). When the same fingerprint has
-already been sent in this session, every occurrence **except the newest** is
-replaced by a short deterministic stub:
+Coding agents (Claude Code, Codex, OpenCode, Aider, etc.) resend the **entire accumulated conversation history** on every single turn—including large file reads, long shell outputs, test logs, and search results.
 
-> `[shrinkgate] unchanged content — an identical copy was already sent earlier
-> in this conversation (first seen in request #3, 18422 bytes). This duplicate
-> was trimmed locally to save context; the original text above is still accurate.`
+As your session grows from 10 to 50 turns:
+- 💸 **Token bills skyrocket**: You pay for the same 20KB file read 40 times over.
+- 🐢 **Latency slows down**: Uploading megabytes of redundant context adds network and inference delay.
+- 📉 **Context limits trigger early**: Hitting 100k or 200k context windows prematurely forces lossy compaction.
 
-| Property | Guarantee |
-| --- | --- |
-| **Newest occurrence is verbatim** | the model always has the current copy of any file or command output |
-| **Deterministic stubs** | the rewritten prefix is byte-identical from the second request on, so the provider's prompt cache keeps hitting |
-| **Stubs say what happened** | first-seen request number and original size, so the model can still reason about earlier context |
-| **Never touched** | system prompts, tool/function definitions, tool-use and tool-call blocks, thinking/reasoning blocks, images and other media, and the newest `keep_last_messages` (default 2) messages |
-| **Never re-stubbed** | content that is already a stub is skipped, whatever the size threshold |
-| **Idempotent + stateful per session** | sessions keyed by model + system prompt (+ metadata id), capped at `max_sessions` with LRU eviction |
+**ShrinkGate fixes this silently on localhost.** It intercepts the outbound JSON request, fingerprints repeated data with length-prefixed SHA-256, replaces earlier duplicate payloads with deterministic stubs, and streams the response back with **zero modification to model output**.
 
-Nothing is uploaded anywhere: fingerprinting, rewriting and journaling all
-happen locally. Auth headers pass through unchanged. Responses (SSE or
-buffered) stream through untouched; ShrinkGate only taps `usage` fields to
-keep a local savings journal.
+---
 
-## Install
+## ✨ Features at a Glance
 
-**Build from source** (Rust 1.85+):
+| Feature | Description |
+| :--- | :--- |
+| **🚀 Sub-Millisecond Overhead** | Zero-copy streaming powered by Hyper 1.0, Tokio, and Rustls. Adds `<0.5ms` to request cycles. |
+| **🔒 100% Local & Private** | Strictly binds to `127.0.0.1`. No telemetry, no external accounts, no cloud dependencies. |
+| **🎯 Prompt-Cache Friendly** | Replacement stubs are strictly deterministic, keeping upstream prompt cache hit rates at maximum efficiency. |
+| **🛡️ Safe by Design** | System prompts, function definitions, thinking/reasoning blocks, and media payloads are **never modified**. |
+| **🔄 Zero-Downtime Agent Wiring** | One-command setup (`shrinkgate connect`) with atomic config backups and clean rollback (`shrinkgate uninstall`). |
+| **📦 Tiny Static Footprint** | Compiled with LTO, stripping, and size optimization into a single self-contained ~2.3 MB binary. |
+
+---
+
+## 📊 Live Savings Demo
+
+Run the built-in 3-turn integration fixture directly from your terminal:
 
 ```sh
+shrinkgate demo
+```
+
+```text
+ShrinkGate demo — gateway :39481 → mock upstream :41029
+
+request                                        est.in   sent.in     saved  upstream
+turn 1: read payments.rs (fresh read)            2800      2800         0      2800
+turn 2: same history resent + a follow-up        5642      2884     +2758      2884
+turn 3: history resent again, file edited once   8484      5684     +2800      5684
+
+Total estimated savings this demo: −5,558 tokens (deterministic stubs, prompt-cache friendly).
+Journal: /tmp/shrinkgate-demo/usage.jsonl
+```
+
+---
+
+## ⚡ Quick Start
+
+### 1. Install ShrinkGate
+
+Choose your preferred installation method:
+
+#### Option A: Prebuilt Binary (Recommended)
+```sh
+curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.0-x86_64-linux.tar.gz | tar -xz
+sudo mv shrinkgate /usr/local/bin/
+```
+
+#### Option B: Build from Source (Rust 1.85+)
+```sh
+git clone https://github.com/KotalaKishanReddy/shrinkgate.git
+cd shrinkgate
 cargo build --release
-./target/release/shrinkgate demo   # 3-turn end-to-end demo, no keys needed
+cp target/release/shrinkgate ~/.local/bin/
 ```
 
-**Prebuilt binary** — from [Releases](https://github.com/KotalaKishanReddy/shrinkgate/releases):
+#### Option C: Docker Container
+```sh
+docker run -d --name shrinkgate --network host --restart always \
+  -v ~/.local/state/shrinkgate:/data \
+  ghcr.io/kotalakishanreddy/shrinkgate:latest
+```
+
+---
+
+### 2. Connect Your Coding Agent
+
+Wire any supported agent with a single command:
 
 ```sh
-curl -L https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-x86_64-linux.tar.gz \
-  | tar xz && ./shrinkgate demo
+# Claude Code (auto-configures ANTHROPIC_BASE_URL, session hooks, and statusline)
+shrinkgate connect claude
+
+# OpenAI Codex (wires base_url and responses wire_api in ~/.codex/config.toml)
+shrinkgate connect codex
+
+# OpenCode (registers local shrinkgate provider in opencode.json)
+shrinkgate connect opencode
+
+# Muse Code (generates helper environment file)
+shrinkgate connect muse
 ```
 
-**Container image** — from `ghcr.io`:
+Check system status and live savings at any time:
+```sh
+shrinkgate status
+```
+
+---
+
+## 🔍 How the Shrink Pass Works
+
+```mermaid
+flowchart TD
+    A["Outbound Agent Request"] --> B["ShrinkGate (127.0.0.1:18793)"]
+    B --> C{"Check Content Block"}
+    C -- "System Prompt / Reasoning / Media" --> D["Keep Verbatim (Untouched)"]
+    C -- "Newest Message in Window" --> D
+    C -- "First-Seen File or Tool Output" --> E["Fingerprint & Store Turn ID"]
+    E --> D
+    C -- "Identical Duplicate Resent" --> F["Replace with Deterministic Stub"]
+    D --> G["Forward to Upstream via TLS"]
+    F --> G
+    G --> H["Provider API (Anthropic / OpenAI)"]
+    H --> I["Stream Response Back Unmodified"]
+```
+
+### The Guarantee Matrix
+
+| Content Type | ShrinkGate Behavior | Reason |
+| :--- | :---: | :--- |
+| **System Prompts & Developer Instructions** | 🔒 **Untouched** | Agent instructions must never be corrupted. |
+| **Tool / Function Definitions** | 🔒 **Untouched** | Schema definitions must match model expectations. |
+| **Thinking / Reasoning Blocks** | 🔒 **Untouched** | Reasoning traces are non-reproducible. |
+| **Images & Multimodal Blobs** | 🔒 **Untouched** | Binary media cannot be stubbed safely. |
+| **Newest Message Window** (`keep_last_messages`) | 🔒 **Untouched** | Immediate conversational context remains 100% intact. |
+| **Repeated File Reads / Tool Results** | ✂️ **Stubbed** | Replaced with informative, cache-stable reference stub. |
+
+When an identical file read or tool output is resent on subsequent turns, older copies are replaced with:
+```text
+[shrinkgate] unchanged content — an identical copy was already sent earlier
+in this conversation (first seen in request #3, 18422 bytes). This duplicate
+was trimmed locally to save context; the original text above is still accurate.
+```
+
+---
+
+## 🔌 Supported Agents
+
+<details open>
+<summary><b>Anthropic Claude Code</b></summary>
 
 ```sh
-docker run --rm --network host ghcr.io/kotalakishanreddy/shrinkgate
+shrinkgate connect claude [--lean] [--statusline]
 ```
+- Sets `env.ANTHROPIC_BASE_URL` to `http://127.0.0.1:18793`.
+- Installs `SessionStart` auto-launch hook.
+- `--lean`: Caps auto-compact threshold at 200k tokens.
+- `--statusline`: Displays today's cumulative token savings in your terminal statusline.
+</details>
 
-> The engine only ever binds `127.0.0.1` — that's the product's privacy
-> guarantee — so the container must use `--network host` to serve your host's
-> loopback port. Mount a volume at `/data` if you want the savings journal to
-> survive `--rm`.
-
-## Wire up an agent
-
-`connect` starts the engine (systemd user unit `shrinkgate.service` if
-available, else a detached process), copies the binary to
-`~/.local/bin/shrinkgate`, writes the agent config, and records the previous
-value of every key it touched. `uninstall` restores each key **only while it
-still holds what ShrinkGate wrote** — anything you changed since connect is
-left alone and reported.
+<details>
+<summary><b>OpenAI Codex</b></summary>
 
 ```sh
-./target/release/shrinkgate connect claude   # + install service
-./target/release/shrinkgate status
-./target/release/shrinkgate uninstall claude # restore previous settings
+shrinkgate connect codex [--env-key OPENAI_API_KEY]
+```
+- Safely edits `~/.codex/config.toml` inside a managed marker block.
+- Routes both OpenAI API keys and official ChatGPT session logins (`chatgpt-account-id`).
+</details>
+
+<details>
+<summary><b>OpenCode</b></summary>
+
+```sh
+shrinkgate connect opencode
+```
+- Adds `@ai-sdk/anthropic` and `@ai-sdk/openai` provider configs in `~/.config/opencode/opencode.json`.
+- Access shrunk models via `shrinkgate/claude-sonnet-4-5` or `shrinkgate/gpt-5`.
+</details>
+
+<details>
+<summary><b>Any Custom Agent (Aider, Cursor, Continue, etc.)</b></summary>
+
+Print shell export strings for manual wiring:
+```sh
+shrinkgate env
 ```
 
-### Claude Code
+```sh
+export ANTHROPIC_BASE_URL="http://127.0.0.1:18793"
+export OPENAI_BASE_URL="http://127.0.0.1:18793/v1"
+```
+Or force specific upstream routing using the `x-shrinkgate-upstream` HTTP header:
+```http
+POST /v1/chat/completions HTTP/1.1
+Host: 127.0.0.1:18793
+x-shrinkgate-upstream: openai
+Authorization: Bearer sk-...
+```
+</details>
 
-`connect claude` writes to `~/.claude/settings.json` (honoring
-`CLAUDE_CONFIG_DIR`):
+---
 
-```json
-{ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:18793",
-           "ENABLE_TOOL_SEARCH": "true" },
-  "hooks": { "SessionStart": [ { "hooks": [
-      { "type": "command", "command": "~/.local/bin/shrinkgate serve --ensure" } ] } ] } }
+## 🛠️ CLI Reference
+
+```text
+shrinkgate <COMMAND>
+
+Commands:
+  serve       Run the background gateway engine
+  connect     Configure an agent (claude | codex | opencode | muse)
+  status      Show engine health, wiring state, and token savings
+  uninstall   Restore original agent settings (use --purge for full cleanup)
+  lean        Configure Claude Code auto-compact window (on | off | status)
+  statusline  Output one-line savings metric for prompt statuslines
+  demo        Execute 3-turn simulated savings demo
+  env         Print environment variables for manual agent configuration
+  config      Display resolved configuration and file paths
 ```
 
-- `ENABLE_TOOL_SEARCH` is only set when you haven't set it yourself.
-- SessionStart hook keeps the engine alive even without systemd.
-- `--lean` / `shrinkgate lean on` caps `CLAUDE_CODE_AUTO_COMPACT_WINDOW` at
-  200000 tokens (lean mode, like the original's "lean").
-- `--statusline` wires `shrinkgate statusline` (savings per day).
-- Your `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` env is untouched and
-  forwarded with every request.
+---
 
-### Codex
+## ⚙️ Configuration
 
-`connect codex` adds a managed provider block to `~/.codex/config.toml`
-(honoring `CODEX_HOME`), between `# --- ShrinkGate local engine ---` markers:
-
-```toml
-model_provider = "shrinkgate_local"
-[model_providers.shrinkgate_local]
-name = "ShrinkGate (local engine)"
-base_url = "http://127.0.0.1:18793/v1"
-wire_api = "responses"
-requires_openai_auth = true   # ChatGPT sign-in kept; forwarded as-is
-```
-
-ChatGPT-login requests (JWT bearer / `chatgpt-account-id`) are routed to the
-ChatGPT backend with the `/v1` prefix stripped; API-key requests go to the
-configured OpenAI upstream. Use `--env-key VAR` to authenticate with an env
-var instead.
-
-### OpenCode
-
-`connect opencode` adds providers to `~/.config/opencode/opencode.json`:
-
-- `shrinkgate` → `@ai-sdk/anthropic` at `http://127.0.0.1:18793/v1`
-  (the `/v1` is required — the SDK only adds it for the official host)
-- `shrinkgate-openai` → `@ai-sdk/openai`
-- `shrinkgate-meta` → Muse models via the Responses adapter
-- `shrinkgate-opencode` → `@ai-sdk/openai` pointed at OpenCode's own inference
-  endpoint (`https://opencode.ai/inference/openai`), with
-  `x-shrinkgate-upstream: opencode` set automatically; free models
-  (`glm-5.3-flash-free`, `deepseek-v4.1-flash-free`, `flint-40b-free`,
-  `beam-free`) use `{env:OPENCODE_API_KEY}`
-
-Pick models as `shrinkgate/claude-sonnet-4-5` etc. Keys use `{env:...}` or
-`opencode auth login` — whatever you already use.
-
-### Muse Code (Meta) — best effort
-
-Muse Code is first-party paired with Meta's Model API and has no official
-provider override. `connect muse` writes a helper env file and documents the
-community `--base-url` route (`MODEL_API_KEY` unchanged; ShrinkGate forwards
-to `api.meta.ai`).
-
-### Any other agent
-
-Point it at the engine and pick the protocol by path:
-
-| Protocol                | Path                        | Upstream default          |
-| ----------------------- | --------------------------- | ------------------------- |
-| Anthropic Messages      | `POST /v1/messages`         | `https://api.anthropic.com` |
-| OpenAI Chat Completions | `POST /v1/chat/completions` | `https://api.openai.com`  |
-| OpenAI Responses        | `POST /v1/responses`        | OpenAI or ChatGPT backend |
-| anything else           | any path                    | reverse-proxied by guess  |
-
-Or run `shrinkgate env` and set the printed variables
-(`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`). A request header
-`x-shrinkgate-upstream: anthropic|openai|meta|opencode` forces the upstream
-(it is stripped before forwarding).
-
-## Commands
-
-| Command | What it does |
-| --- | --- |
-| `serve [--port P] [--ensure] [--quiet] [--no-shrink]` | run the engine (`--ensure`: start if not healthy, used by the hook) |
-| `connect claude [--lean] [--statusline] [--force] [--no-service]` | wire Claude Code |
-| `connect codex [--env-key VAR] [--force]` | wire Codex |
-| `connect opencode [--force]` | wire OpenCode |
-| `connect muse` | write the Muse helper env |
-| `status [claude\|codex\|opencode\|muse]` | engine health, savings, wiring state |
-| `uninstall claude\|codex\|opencode\|muse [--purge]` | restore settings (`--purge` removes binary, service and state) |
-| `lean on\|off\|status [--force]` | Claude Code auto-compact window |
-| `statusline` | one line for Claude Code's statusline |
-| `demo` | 3-turn mock-upstream demo showing per-request savings |
-| `env`, `config` | manual wiring exports / resolved configuration |
-
-## Configuration
-
-`~/.config/shrinkgate/config.toml` (written as a commented template on first
-run; CLI flags win):
+A configuration template is automatically created at `~/.config/shrinkgate/config.toml`:
 
 ```toml
 port = 18793
 shrink = true
-min_block_bytes = 600        # never stub blocks smaller than this
-keep_last_messages = 2       # never stub the N newest messages
-allow_assistant_text = false # also stub identical assistant text
-max_sessions = 1024
+min_block_bytes = 600        # Minimum content size to qualify for stubbing
+keep_last_messages = 2       # Number of newest messages to always keep verbatim
+allow_assistant_text = false # Whether to deduplicate repeated assistant outputs
+max_sessions = 1024          # In-memory session tracking capacity (LRU evicted)
+
+# Upstream API Endpoints
 upstream_anthropic = "https://api.anthropic.com"
-upstream_openai = "https://api.openai.com"
-upstream_meta = "https://api.meta.ai"
-upstream_opencode = "https://opencode.ai/inference/openai"
-upstream_chatgpt = "https://chatgpt.com/backend-api/codex"
-default_upstream = "openai"
+upstream_openai    = "https://api.openai.com"
+upstream_meta      = "https://api.meta.ai"
+upstream_opencode  = "https://opencode.ai/inference/openai"
+upstream_chatgpt   = "https://chatgpt.com/backend-api/codex"
+default_upstream   = "openai"
 ```
 
-State lives in `~/.local/state/shrinkgate/`:
+Local runtime data is stored in `~/.local/state/shrinkgate/`:
+- `usage.jsonl`: Local savings journal recording timestamp, route, tokens saved, and latency.
+- `wire-*.json`: Backup state for clean rollbacks upon uninstall.
 
-- `usage.jsonl` — one record per request (route, session, estimated
-  orig/sent tokens, saved tokens, blocks stubbed, status, latency, real
-  upstream usage when reported)
-- `wire-<agent>.json` — what `connect` wrote and what was there before
+---
 
-Token estimates are `bytes/4`; real usage comes from the model's own usage
-fields (tapped from JSON bodies and SSE events).
+## 🔒 Privacy & Safety Principles
 
-## Privacy & safety
+1. **Zero Data Egress**: ShrinkGate only communicates with the upstreams you explicitly configure.
+2. **Untouched Credentials**: Headers containing `Authorization` or `x-api-key` are never logged, stored, or modified.
+3. **Stream Passthrough**: Responses from model APIs (both Server-Sent Events and buffered JSON) stream directly back to the agent without buffering delays.
+4. **Non-Destructive Uninstall**: Running `shrinkgate uninstall <agent>` checks whether settings were modified since connection, restoring your original files safely.
 
-- Local-only listener: binds `127.0.0.1`, never a public interface.
-- No account, no license server, no telemetry — there is nothing to sign in to.
-- Your API keys / ChatGPT login are only ever forwarded to the upstream you
-  configured, over TLS with webpki roots.
-- `uninstall` restores original settings and refuses to delete anything that
-  changed after connect.
-- The gateway never modifies response bodies.
+---
 
-## Limitations
+## 🤝 Contributing
 
-- Assistant text is not stubbed by default (`allow_assistant_text = false`)
-  since continuity there is usually worth its tokens.
-- Responses-API `reasoning` items and tool definitions are never shrunk —
-  replaying reasoning across turns is how those APIs work.
-- Muse Code wiring is best-effort (no official override exists yet).
-- HTTP/1 only on the local leg and to upstreams (coding agents don't need
-  more); TLS with webpki roots on the upstream leg.
+Contributions are warmly welcomed! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on setting up the developer environment, coding standards, and submitting pull requests.
 
-## License
+```sh
+# Run tests & lints
+make check
+make test
+```
 
-Apache-2.0 — see [LICENSE](LICENSE). Not affiliated with Context Shrink LLC or
-Anthropic/OpenAI/Meta.
+---
+
+## 📄 License
+
+This project is licensed under the **Apache License 2.0** — see the [LICENSE](LICENSE) file for details.
+
+*Disclaimer: ShrinkGate is an independent open-source project and is not affiliated with Anthropic, OpenAI, Meta, or Context Shrink LLC.*

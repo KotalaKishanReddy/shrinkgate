@@ -1,16 +1,16 @@
 //! Shared HTTP plumbing: TLS-capable upstream client, body helpers, header
 //! filtering, and the SSE usage-tapping body.
 
-use bytes::Bytes;
 use bytes::Buf;
+use bytes::Bytes;
+use futures_util::StreamExt;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Frame, SizeHint};
 use hyper::HeaderMap;
+use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use hyper_rustls::HttpsConnector;
-use futures_util::StreamExt;
 use serde_json::Value;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -42,7 +42,9 @@ impl<D: Buf, E> BoxBody<D, E> {
     where
         B: Body<Data = D, Error = E> + Send + 'static,
     {
-        Self { inner: Box::pin(body) }
+        Self {
+            inner: Box::pin(body),
+        }
     }
 }
 

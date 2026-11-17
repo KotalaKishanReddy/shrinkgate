@@ -62,9 +62,7 @@ enum Cmd {
         env_key: Option<String>,
     },
     /// Show connection status, engine health and savings.
-    Status {
-        agent: Option<String>,
-    },
+    Status { agent: Option<String> },
     /// Undo a connect: restore the agent's original settings.
     Uninstall {
         agent: String,
@@ -93,7 +91,9 @@ async fn main() {
     let cli = Cli::parse();
     let cfg = Config::load();
     let cfg = match &cli.cmd {
-        Cmd::Serve { port, no_shrink, .. } => {
+        Cmd::Serve {
+            port, no_shrink, ..
+        } => {
             let mut c = cfg;
             if let Some(p) = port {
                 c.port = *p;
@@ -123,7 +123,17 @@ async fn main() {
             statusline,
             no_service,
             env_key,
-        } => match connect_agent(&cfg, agent, *force, *lean, *statusline, *no_service, env_key.as_deref()).await {
+        } => match connect_agent(
+            &cfg,
+            agent,
+            *force,
+            *lean,
+            *statusline,
+            *no_service,
+            env_key.as_deref(),
+        )
+        .await
+        {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("shrinkgate connect: {e:#}");
@@ -255,8 +265,14 @@ fn print_env(cfg: &Config) {
     println!("#   ^ Claude Code and any Anthropic-format agent (auth forwarded as-is)");
     println!("export OPENAI_BASE_URL={}/v1", cfg.engine_url());
     println!("#   ^ OpenAI-compatible agents (Chat Completions / Responses)");
-    println!("# Codex config.toml: base_url = \"{}/v1\", wire_api = \"responses\"", cfg.engine_url());
-    println!("# OpenCode: provider options.baseURL = \"{}/v1\"", cfg.engine_url());
+    println!(
+        "# Codex config.toml: base_url = \"{}/v1\", wire_api = \"responses\"",
+        cfg.engine_url()
+    );
+    println!(
+        "# OpenCode: provider options.baseURL = \"{}/v1\"",
+        cfg.engine_url()
+    );
 }
 
 fn print_config(cfg: &Config) {
