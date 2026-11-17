@@ -23,7 +23,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 bytes = "1"
 ring = "0.17"
 clap = { version = "4", features = ["derive", "env"] }
-toml_edit = "0.22"
+toml_edit = "0.25"
 anyhow = "1"
 futures-util = "0.3"
 
