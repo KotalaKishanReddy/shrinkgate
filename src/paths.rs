@@ -65,8 +65,14 @@ pub fn bin_install_path() -> PathBuf {
     home().join(".local/bin/shrinkgate")
 }
 
+#[allow(dead_code)]
 pub fn systemd_unit_path() -> PathBuf {
     base_dir("XDG_CONFIG_HOME", ".config").join("systemd/user/shrinkgate.service")
+}
+
+#[allow(dead_code)]
+pub fn launchd_plist_path() -> PathBuf {
+    home().join("Library/LaunchAgents/com.shrinkgate.engine.plist")
 }
 
 pub fn expand_tilde(p: &str) -> PathBuf {

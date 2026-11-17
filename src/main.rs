@@ -240,8 +240,11 @@ fn print_status(cfg: &Config, agent: Option<&str>) {
             println!("{}", wire::codex::status());
             println!("{}", wire::opencode::status());
             println!("{}", wire::muse::status());
-            if wire::systemd::installed() {
-                println!("service: systemd user unit installed (starts at login)");
+            if wire::service::installed() {
+                println!(
+                    "service: {} installed (starts at login)",
+                    wire::service::description()
+                );
             } else {
                 println!("service: not installed (SessionStart hook / detached fallback)");
             }

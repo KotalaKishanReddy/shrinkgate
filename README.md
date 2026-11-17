@@ -8,14 +8,14 @@
 [![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate?style=flat-square&color=blue&logo=rust)](https://github.com/KotalaKishanReddy/shrinkgate/releases)
 [![Container Image](https://img.shields.io/badge/ghcr.io-docker_image-2496ED?style=flat-square&logo=docker)](https://github.com/KotalaKishanReddy/shrinkgate/pkgs/container/shrinkgate)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg?style=flat-square)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey?style=flat-square&logo=linux)](https://github.com/KotalaKishanReddy/shrinkgate)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey?style=flat-square&logo=linux)](https://github.com/KotalaKishanReddy/shrinkgate)
 [![Binary Size](https://img.shields.io/badge/binary_size-2.3MB-orange?style=flat-square)](https://github.com/KotalaKishanReddy/shrinkgate)
 
 <br/>
 
 **A lightweight (~2.3 MB) local daemon on `127.0.0.1:18793` that cuts your coding agent token costs and latency by deduplicating conversation history before it reaches LLM APIs.**
 
-*Built from scratch in safe, idiomatic Rust for Linux. An open-source alternative to proprietary context compressors.*
+*Built from scratch in safe, idiomatic Rust for Linux & macOS. An open-source alternative to proprietary context compressors.*
 
 <br/>
 
@@ -93,17 +93,31 @@ Journal: /tmp/shrinkgate-demo/usage.jsonl
 Choose your preferred installation method:
 
 #### Option A: Prebuilt Binary (Recommended)
+
+**Linux (x86_64):**
 ```sh
 curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.0-x86_64-linux.tar.gz | tar -xz
 sudo mv shrinkgate /usr/local/bin/
 ```
 
-#### Option B: Build from Source (Rust 1.85+)
+**macOS (Apple Silicon M1/M2/M3/M4):**
 ```sh
-git clone https://github.com/KotalaKishanReddy/shrinkgate.git
-cd shrinkgate
-cargo build --release
-cp target/release/shrinkgate ~/.local/bin/
+curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.0-aarch64-macos.tar.gz | tar -xz
+sudo mv shrinkgate /usr/local/bin/
+```
+
+**macOS (Intel x86_64):**
+```sh
+curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.0-x86_64-macos.tar.gz | tar -xz
+sudo mv shrinkgate /usr/local/bin/
+```
+
+#### Option B: Cargo Install
+```sh
+cargo install shrinkgate
+# or build from source:
+git clone https://github.com/KotalaKishanReddy/shrinkgate.git && cd shrinkgate
+cargo build --release && cp target/release/shrinkgate ~/.local/bin/
 ```
 
 #### Option C: Docker Container

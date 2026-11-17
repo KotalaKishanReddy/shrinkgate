@@ -2,12 +2,16 @@
 name = "shrinkgate"
 version = "0.1.0"
 edition = "2021"
-description = "ShrinkGate — a local context-shrinking gateway for coding agents (Claude Code, Codex, OpenCode, Muse Code, ...). Linux alternative to ContextShrink Code."
+rust-version = "1.85"
+description = "ShrinkGate — a local context-shrinking gateway for coding agents (Claude Code, Codex, OpenCode, Muse Code, ...). Linux & macOS alternative to ContextShrink Code."
 license = "Apache-2.0"
 repository = "https://github.com/KotalaKishanReddy/shrinkgate"
+homepage = "https://github.com/KotalaKishanReddy/shrinkgate"
+documentation = "https://github.com/KotalaKishanReddy/shrinkgate#readme"
 readme = "README.md"
 keywords = ["llm", "proxy", "gateway", "context", "coding-agent"]
 categories = ["command-line-utilities", "network-programming"]
+include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }

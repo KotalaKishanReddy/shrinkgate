@@ -7,6 +7,7 @@ pub mod claude;
 pub mod codex;
 pub mod muse;
 pub mod opencode;
+pub mod service;
 pub mod systemd;
 
 use serde_json::Value;
