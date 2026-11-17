@@ -19,7 +19,15 @@ fn muse_installed() -> bool {
         .any(|dir| dir.join("muse").exists() || dir.join("muse.exe").exists())
 }
 
-pub async fn connect(cfg: &Config) -> anyhow::Result<()> {
+pub async fn connect(cfg: &Config, dry_run: bool) -> anyhow::Result<()> {
+    if dry_run {
+        println!("Muse is experimental: configure default_upstream = \"meta\" before routing traffic. Helper path: {}", paths::config_dir().join("muse.env").display());
+        return Ok(());
+    }
+    anyhow::ensure!(
+        cfg.default_upstream == "meta",
+        "Muse requires default_upstream = \"meta\"; no settings changed"
+    );
     if !ensure_engine(cfg).await? {
         return Err(anyhow::anyhow!(
             "the ShrinkGate engine did not start. Nothing was changed."

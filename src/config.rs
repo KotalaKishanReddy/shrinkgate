@@ -14,8 +14,8 @@ pub struct Config {
     /// Also stub identical *assistant* text blocks (off: assistant text is cheap
     /// and carries continuity; tool results are where the bulk is).
     pub allow_assistant_text: bool,
-    /// Cap on concurrent tracked sessions (LRU eviction beyond this).
-    pub max_sessions: usize,
+    /// Opt in to deduplicating user instructions; tool outputs only by default.
+    pub allow_user_text: bool,
     // Upstream bases. Anthropic/Meta without a path suffix (the client path is
     // appended verbatim); OpenAI likewise (`/v1/...` comes from the request).
     pub upstream_anthropic: String,
@@ -38,7 +38,7 @@ impl Default for Config {
             min_block_bytes: 600,
             keep_last_messages: 2,
             allow_assistant_text: false,
-            max_sessions: 1024,
+            allow_user_text: false,
             upstream_anthropic: "https://api.anthropic.com".into(),
             upstream_openai: "https://api.openai.com".into(),
             upstream_meta: "https://api.meta.ai".into(),
@@ -50,11 +50,68 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn load() -> Self {
+    pub fn load() -> anyhow::Result<Self> {
         let mut cfg = Self::default();
         let file = crate::paths::config_file();
-        if let Ok(text) = std::fs::read_to_string(&file) {
-            if let Ok(doc) = text.parse::<toml_edit::DocumentMut>() {
+        if let Some(text) = crate::wire::read_optional(&file)? {
+            let doc = text.parse::<toml_edit::DocumentMut>()?;
+            {
+                for (key, item) in doc.iter() {
+                    match key {
+                        "port" => anyhow::ensure!(
+                            item.as_integer().is_some_and(|v| (1..=65535).contains(&v)),
+                            "port must be between 1 and 65535"
+                        ),
+                        "min_block_bytes" | "keep_last_messages" => anyhow::ensure!(
+                            item.as_integer()
+                                .is_some_and(|v| (0..=16777216).contains(&v)),
+                            "{key} must be a nonnegative integer <= 16777216"
+                        ),
+                        "max_sessions" => {} // deprecated: shrink is now stateless
+                        "shrink" | "allow_assistant_text" | "allow_user_text" => {
+                            anyhow::ensure!(item.is_bool(), "{key} must be a boolean")
+                        }
+                        "default_upstream" => anyhow::ensure!(
+                            item.as_str().is_some_and(|s| [
+                                "anthropic",
+                                "openai",
+                                "meta",
+                                "opencode"
+                            ]
+                            .contains(&s)),
+                            "invalid default_upstream"
+                        ),
+                        key if key.starts_with("upstream_") => {
+                            let url = item
+                                .as_str()
+                                .ok_or_else(|| anyhow::anyhow!("{key} must be a URL string"))?;
+                            let uri: hyper::Uri = url.parse()?;
+                            let local =
+                                matches!(uri.host(), Some("127.0.0.1" | "localhost" | "[::1]"));
+                            anyhow::ensure!(
+                                uri.scheme_str() == Some("https")
+                                    || (uri.scheme_str() == Some("http") && local),
+                                "{key} requires HTTPS (HTTP is only allowed on loopback)"
+                            );
+                            anyhow::ensure!(
+                                uri.host().is_some() && uri.query().is_none() && !url.contains('@'),
+                                "invalid upstream base URL"
+                            );
+                            anyhow::ensure!(
+                                [
+                                    "upstream_anthropic",
+                                    "upstream_openai",
+                                    "upstream_meta",
+                                    "upstream_opencode",
+                                    "upstream_chatgpt"
+                                ]
+                                .contains(&key),
+                                "unknown configuration key {key}"
+                            );
+                        }
+                        _ => anyhow::bail!("unknown configuration key {key}"),
+                    }
+                }
                 cfg.port = doc
                     .get("port")
                     .and_then(|i| i.as_integer())
@@ -78,11 +135,10 @@ impl Config {
                     .get("allow_assistant_text")
                     .and_then(|i| i.as_bool())
                     .unwrap_or(cfg.allow_assistant_text);
-                cfg.max_sessions = doc
-                    .get("max_sessions")
-                    .and_then(|i| i.as_integer())
-                    .map(|v| v.max(8) as usize)
-                    .unwrap_or(cfg.max_sessions);
+                cfg.allow_user_text = doc
+                    .get("allow_user_text")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 for (key, field) in [
                     ("upstream_anthropic", &mut cfg.upstream_anthropic),
                     ("upstream_openai", &mut cfg.upstream_openai),
@@ -103,7 +159,7 @@ impl Config {
                 }
             }
         }
-        cfg
+        Ok(cfg)
     }
 
     pub fn write_default_example(dir: &Path) {

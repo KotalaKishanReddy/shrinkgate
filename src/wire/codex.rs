@@ -7,9 +7,7 @@ use toml_edit::{value, DocumentMut, Item, Table};
 
 use crate::config::Config;
 use crate::paths;
-use crate::wire::{
-    ensure_bin, ensure_engine, now_iso, read_json_file, wire_state_file, write_json_private,
-};
+use crate::wire::{ensure_bin, ensure_engine, now_iso, read_json_file, wire_state_file};
 
 pub const PROVIDER_ID: &str = "shrinkgate_local";
 const START: &str = "# --- ShrinkGate local engine ---";
@@ -23,13 +21,18 @@ fn config_path() -> std::path::PathBuf {
     paths::codex_dir().join("config.toml")
 }
 
-pub async fn connect(cfg: &Config, force: bool, env_key: Option<String>) -> anyhow::Result<()> {
-    ensure_bin()?;
-    if !ensure_engine(cfg).await? {
-        return Err(refuse("the ShrinkGate engine did not start"));
-    }
+pub async fn connect(
+    cfg: &Config,
+    force: bool,
+    env_key: Option<String>,
+    dry_run: bool,
+    no_service: bool,
+) -> anyhow::Result<()> {
     let path = config_path();
-    let original = std::fs::read_to_string(&path).ok();
+    if crate::wire::already_connected("codex", &path)? {
+        return Ok(());
+    }
+    let original = crate::wire::read_optional(&path)?;
     let text = original.clone().unwrap_or_default();
     let mut doc = text
         .parse::<DocumentMut>()
@@ -53,6 +56,15 @@ pub async fn connect(cfg: &Config, force: bool, env_key: Option<String>) -> anyh
         ));
     }
 
+    if doc.get("model_providers").is_some_and(|v| !v.is_table()) {
+        return Err(refuse("model_providers must be a TOML table"));
+    }
+    if env_key
+        .as_ref()
+        .is_some_and(|k| k.is_empty() || !k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+    {
+        return Err(refuse("env-key must be an environment variable name"));
+    }
     doc["model_provider"] = value(PROVIDER_ID);
     if doc.get("model_providers").is_none() {
         doc["model_providers"] = Item::Table(Table::new());
@@ -72,12 +84,21 @@ pub async fn connect(cfg: &Config, force: bool, env_key: Option<String>) -> anyh
     doc["model_providers"][PROVIDER_ID] = Item::Table(t);
     let written = format!("{START}\n{doc}{END}\n");
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    if dry_run {
+        crate::wire::preview(&path, &written);
+        return Ok(());
     }
-    std::fs::write(&path, &written)?;
-    write_json_private(
-        &wire_state_file("codex"),
+    let bin = ensure_bin()?;
+    if !no_service {
+        crate::wire::systemd::install(&bin);
+    }
+    if !ensure_engine(cfg).await? {
+        return Err(refuse("the ShrinkGate engine did not start"));
+    }
+    crate::wire::persist_connection(
+        "codex",
+        &path,
+        &written,
         &json!({
             "version": 1,
             "connected_at": now_iso(),
@@ -126,7 +147,7 @@ pub fn status() -> String {
 
 pub fn uninstall() -> anyhow::Result<bool> {
     let state_file = wire_state_file("codex");
-    let Some(state) = read_json_file(&state_file) else {
+    let Some(state) = crate::wire::read_state("codex")? else {
         println!("Not connected by ShrinkGate. Nothing to restore for Codex.");
         return Ok(crate::wire::no_other_wires(None));
     };
@@ -142,7 +163,7 @@ pub fn uninstall() -> anyhow::Result<bool> {
         return Ok(false);
     }
     match original {
-        Some(text) => std::fs::write(&path, text)?,
+        Some(text) => crate::wire::atomic_write(&path, text.as_bytes())?,
         None => {
             let _ = std::fs::remove_file(&path);
         }

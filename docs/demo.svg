@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1224" height="350" viewBox="0 0 1224 350" role="img" aria-label="Recorded local ShrinkGate demo; synthetic fixture, not measured billing savings">
+<rect width="1224" height="350" rx="12" fill="#131f2d"/>
+<circle cx="26" cy="26" r="6" fill="#fb7185"/><circle cx="48" cy="26" r="6" fill="#fbbf24"/><circle cx="70" cy="26" r="6" fill="#93e5c2"/>
+<text x="26" y="80" fill="#93e5c2" font-family="monospace" font-size="16" xml:space="preserve">$ shrinkgate demo</text>
+<text x="26" y="110" fill="#e9eef6" font-family="monospace" font-size="16" xml:space="preserve">Synthetic loopback fixture · no API keys</text>
+<text x="26" y="140" fill="#e9eef6" font-family="monospace" font-size="16" xml:space="preserve">request                                         est.in   sent.in     saved  upstream</text>
+<text x="26" y="170" fill="#e9eef6" font-family="monospace" font-size="16" xml:space="preserve">turn 1: fresh read                                1722      1722         0      1887</text>
+<text x="26" y="200" fill="#e9eef6" font-family="monospace" font-size="16" xml:space="preserve">turn 2: repeated read                             3444      1764      1679      1979</text>
+<text x="26" y="230" fill="#e9eef6" font-family="monospace" font-size="16" xml:space="preserve">turn 3: changed file                              5184      3504      1679      3822</text>
+<text x="26" y="260" fill="#e9eef6" font-family="monospace" font-size="16" xml:space="preserve">Total estimated savings this demo: −3358 tokens (bytes/4 estimate; synthetic fixture, not measured billing savings).</text>
+<text x="26" y="290" fill="#e9eef6" font-family="monospace" font-size="16" xml:space="preserve">Estimates = candidate bytes / 4. Not measured billing savings.</text>
+</svg>

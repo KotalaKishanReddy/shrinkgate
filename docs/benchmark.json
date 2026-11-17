@@ -1,0 +1,116 @@
+{
+  "kind": "local fixture benchmark; no API calls, token counts, billing or task-quality measurements",
+  "version": "0.1.2",
+  "iterations": 500,
+  "configuration": "compiled defaults",
+  "results": [
+    {
+      "scenario": "anthropic/repeated",
+      "request_bytes_before": 16887,
+      "request_bytes_after": 6427,
+      "request_byte_reduction_percent": 61.94113815360929,
+      "blocks_stubbed": 2,
+      "transform_and_serialize_p50_us": 38,
+      "transform_and_serialize_p95_us": 66
+    },
+    {
+      "scenario": "anthropic/unique",
+      "request_bytes_before": 16887,
+      "request_bytes_after": 16887,
+      "request_byte_reduction_percent": 0.0,
+      "blocks_stubbed": 0,
+      "transform_and_serialize_p50_us": 66,
+      "transform_and_serialize_p95_us": 96
+    },
+    {
+      "scenario": "anthropic/changed_tail",
+      "request_bytes_before": 16887,
+      "request_bytes_after": 11657,
+      "request_byte_reduction_percent": 30.970569076804644,
+      "blocks_stubbed": 1,
+      "transform_and_serialize_p50_us": 41,
+      "transform_and_serialize_p95_us": 69
+    },
+    {
+      "scenario": "anthropic/short",
+      "request_bytes_before": 693,
+      "request_bytes_after": 693,
+      "request_byte_reduction_percent": 0.0,
+      "blocks_stubbed": 0,
+      "transform_and_serialize_p50_us": 5,
+      "transform_and_serialize_p95_us": 6
+    },
+    {
+      "scenario": "chat/repeated",
+      "request_bytes_before": 16765,
+      "request_bytes_after": 6305,
+      "request_byte_reduction_percent": 62.39188786161646,
+      "blocks_stubbed": 2,
+      "transform_and_serialize_p50_us": 28,
+      "transform_and_serialize_p95_us": 35
+    },
+    {
+      "scenario": "chat/unique",
+      "request_bytes_before": 16765,
+      "request_bytes_after": 16765,
+      "request_byte_reduction_percent": 0.0,
+      "blocks_stubbed": 0,
+      "transform_and_serialize_p50_us": 52,
+      "transform_and_serialize_p95_us": 102
+    },
+    {
+      "scenario": "chat/changed_tail",
+      "request_bytes_before": 16765,
+      "request_bytes_after": 11535,
+      "request_byte_reduction_percent": 31.19594393080823,
+      "blocks_stubbed": 1,
+      "transform_and_serialize_p50_us": 40,
+      "transform_and_serialize_p95_us": 101
+    },
+    {
+      "scenario": "chat/short",
+      "request_bytes_before": 571,
+      "request_bytes_after": 571,
+      "request_byte_reduction_percent": 0.0,
+      "blocks_stubbed": 0,
+      "transform_and_serialize_p50_us": 3,
+      "transform_and_serialize_p95_us": 4
+    },
+    {
+      "scenario": "responses/repeated",
+      "request_bytes_before": 16706,
+      "request_bytes_after": 6246,
+      "request_byte_reduction_percent": 62.61223512510475,
+      "blocks_stubbed": 2,
+      "transform_and_serialize_p50_us": 27,
+      "transform_and_serialize_p95_us": 58
+    },
+    {
+      "scenario": "responses/unique",
+      "request_bytes_before": 16706,
+      "request_bytes_after": 16706,
+      "request_byte_reduction_percent": 0.0,
+      "blocks_stubbed": 0,
+      "transform_and_serialize_p50_us": 51,
+      "transform_and_serialize_p95_us": 78
+    },
+    {
+      "scenario": "responses/changed_tail",
+      "request_bytes_before": 16706,
+      "request_bytes_after": 11476,
+      "request_byte_reduction_percent": 31.306117562552377,
+      "blocks_stubbed": 1,
+      "transform_and_serialize_p50_us": 40,
+      "transform_and_serialize_p95_us": 61
+    },
+    {
+      "scenario": "responses/short",
+      "request_bytes_before": 512,
+      "request_bytes_after": 512,
+      "request_byte_reduction_percent": 0.0,
+      "blocks_stubbed": 0,
+      "transform_and_serialize_p50_us": 2,
+      "transform_and_serialize_p95_us": 2
+    }
+  ]
+}

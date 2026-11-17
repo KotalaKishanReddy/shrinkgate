@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::config::Config;
 use crate::shrink::{is_stub_text, stub_text, ShrinkStat};
-use crate::store::{fingerprint, Seen, Session};
+use crate::store::fingerprint;
 
 pub fn session_key(body: &Value) -> String {
     let model = body.get("model").and_then(Value::as_str).unwrap_or("");
@@ -35,7 +35,7 @@ struct Cand {
     bytes: usize,
 }
 
-pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkStat {
+pub fn transform(body: &mut Value, cfg: &Config) -> ShrinkStat {
     let mut stat = ShrinkStat::default();
     if !cfg.shrink {
         return stat;
@@ -59,7 +59,7 @@ pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkSt
             "message" => {
                 let role = item.get("role").and_then(Value::as_str).unwrap_or("");
                 let assistant_ok = cfg.allow_assistant_text && role == "assistant";
-                if role != "user" && !assistant_ok {
+                if !(role == "user" && cfg.allow_user_text || assistant_ok) {
                     continue;
                 }
                 let Some(parts) = item.get("content").and_then(Value::as_array) else {
@@ -79,6 +79,12 @@ pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkSt
                     continue;
                 }
                 for (pi, part) in parts.iter().enumerate() {
+                    if !matches!(
+                        part.get("type").and_then(Value::as_str),
+                        Some("input_text" | "output_text")
+                    ) {
+                        continue;
+                    }
                     let Some(s) = part.get("text").and_then(Value::as_str) else {
                         continue;
                     };
@@ -88,7 +94,7 @@ pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkSt
                     cands.push(Cand {
                         ii,
                         pi: Some(pi),
-                        fp: fingerprint(&[format!("r\x00{s}").as_bytes()]),
+                        fp: fingerprint(&[b"r", s.as_bytes()]),
                         bytes: s.len(),
                     });
                 }
@@ -103,7 +109,7 @@ pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkSt
                 cands.push(Cand {
                     ii,
                     pi: None,
-                    fp: fingerprint(&[format!("r\x00{s}").as_bytes()]),
+                    fp: fingerprint(&[b"r", s.as_bytes()]),
                     bytes: s.len(),
                 });
             }
@@ -114,25 +120,18 @@ pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkSt
         return stat;
     }
 
-    let mut count: HashMap<String, usize> = HashMap::new();
-    let mut last: HashMap<String, usize> = HashMap::new();
+    let mut last: HashMap<&str, usize> = HashMap::new();
     for (ci, c) in cands.iter().enumerate() {
-        *count.entry(c.fp.clone()).or_default() += 1;
-        last.insert(c.fp.clone(), ci);
+        last.insert(&c.fp, ci);
     }
 
     for (ci, c) in cands.iter().enumerate() {
-        let seen_turn = sess
-            .seen
-            .entry(c.fp.clone())
-            .or_insert(Seen { turn: sess.turn })
-            .turn;
         stat.est_orig_bytes += c.bytes;
-        let is_last = last.get(&c.fp) == Some(&ci);
+        let is_last = last.get(c.fp.as_str()) == Some(&ci);
         let in_window = keep > 0 && c.ii >= n.saturating_sub(keep);
-        let dup = count.get(&c.fp).copied().unwrap_or(0) > 1 && !is_last && !in_window;
+        let stub = stub_text(&c.fp, c.bytes);
+        let dup = !is_last && !in_window && stub.len() < c.bytes;
         if dup {
-            let stub = stub_text(seen_turn, c.bytes);
             let stub_len = stub.len();
             let replaced = if let Some(pi) = c.pi {
                 body.pointer_mut(&format!("/input/{}/content/{}/text", c.ii, pi))
@@ -154,7 +153,6 @@ pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkSt
             stat.est_sent_bytes += c.bytes;
         }
     }
-    sess.turn += 1;
     stat
 }
 
@@ -165,7 +163,10 @@ mod tests {
     use serde_json::json;
 
     fn cfg() -> Config {
-        Config::default()
+        Config {
+            allow_user_text: true,
+            ..Config::default()
+        }
     }
 
     fn long() -> String {
@@ -174,14 +175,14 @@ mod tests {
 
     #[test]
     fn function_call_outputs_stubbed() {
-        let (c, mut s) = (cfg(), Session::default());
+        let c = cfg();
         let mut body = json!({"model": "m", "input": [
             {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"},
             {"type": "function_call_output", "call_id": "c1", "output": long()},
             {"type": "function_call_output", "call_id": "c1", "output": long()},
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "tail"}]},
         ]});
-        let stat = transform(&mut body, &mut s, &c);
+        let stat = transform(&mut body, &c);
         assert_eq!(stat.blocks_stubbed, 1);
         assert!(body["input"][1]["output"]
             .as_str()
@@ -195,13 +196,13 @@ mod tests {
 
     #[test]
     fn message_input_parts_stubbed() {
-        let (c, mut s) = (cfg(), Session::default());
+        let c = cfg();
         let mut body = json!({"model": "m", "input": [
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": long()}]},
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": long()}]},
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "tail"}]},
         ]});
-        let stat = transform(&mut body, &mut s, &c);
+        let stat = transform(&mut body, &c);
         assert_eq!(stat.blocks_stubbed, 1);
         assert!(body["input"][0]["content"][0]["text"]
             .as_str()
@@ -211,7 +212,7 @@ mod tests {
 
     #[test]
     fn image_items_skipped_entirely() {
-        let (c, mut s) = (cfg(), Session::default());
+        let c = cfg();
         let mut body = json!({"model": "m", "input": [
             {"type": "message", "role": "user", "content": [
                 {"type": "input_text", "text": long()},
@@ -221,7 +222,7 @@ mod tests {
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": long()}]},
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "tail"}]},
         ]});
-        let stat = transform(&mut body, &mut s, &c);
+        let stat = transform(&mut body, &c);
         // Mixed-media item skipped; the two pure-text copies dedupe to 1 stub.
         assert_eq!(stat.blocks_stubbed, 1);
         assert!(body["input"][0]["content"][0]["text"]
@@ -232,12 +233,12 @@ mod tests {
 
     #[test]
     fn reasoning_items_untouched() {
-        let (c, mut s) = (cfg(), Session::default());
+        let c = cfg();
         let mut body = json!({"model": "m", "input": [
             {"type": "reasoning", "summary": [{"type": "summary_text", "text": long()}]},
             {"type": "reasoning", "summary": [{"type": "summary_text", "text": long()}]},
         ]});
-        assert_eq!(transform(&mut body, &mut s, &c).blocks_stubbed, 0);
+        assert_eq!(transform(&mut body, &c).blocks_stubbed, 0);
         assert!(body["input"][0]["summary"][0]["text"]
             .as_str()
             .unwrap()

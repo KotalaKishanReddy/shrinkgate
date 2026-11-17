@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ShrinkGate — stop sending identical tool output twice</title>
+<meta name="description" content="An open-source local Rust gateway that deduplicates repeated tool outputs for coding agents. Inspect the code, run the offline demo, and measure your workload.">
+<style>
+:root{color-scheme:dark;font:17px/1.65 system-ui,sans-serif;background:#0c121b;color:#e9eef6}*{box-sizing:border-box}body{margin:0}main,nav,footer{max-width:1060px;margin:auto;padding:24px}nav{display:flex;justify-content:space-between;gap:20px}a{color:#93e5c2;text-underline-offset:4px}a:focus-visible{outline:3px solid #93e5c2;outline-offset:5px}.brand{font-weight:800;letter-spacing:-.5px;color:#fff;text-decoration:none}.hero{padding:64px 0 40px}.tag{font-size:13px;color:#93e5c2;letter-spacing:2px;text-transform:uppercase}h1{font-size:clamp(40px,7vw,76px);line-height:1.08;letter-spacing:-2px;max-width:900px;margin:22px 0}h2{font-size:27px;line-height:1.25}.lead{color:#b8c7da;max-width:750px;font-size:21px}.buttons{display:flex;flex-wrap:wrap;gap:14px;margin:28px 0}.button{display:inline-block;padding:11px 20px;border:1px solid #46566c;border-radius:8px;text-decoration:none;color:#e9eef6}.primary{background:#93e5c2;color:#0c121b;border-color:#93e5c2;font-weight:700}.flow{padding:22px;background:#131f2d;border:1px solid #304258;border-radius:12px;font:15px/1.8 ui-monospace,monospace;overflow:auto}img{display:block;width:100%;height:auto;border-radius:12px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin:34px 0}.card{border-top:1px solid #304258;padding-top:16px}.card p,footer{color:#b8c7da}pre{background:#131f2d;padding:22px;border-radius:12px;overflow:auto;font:15px/1.8 ui-monospace,monospace}.note{border-left:3px solid #93e5c2;padding:12px 20px;background:#131f2d}section{margin:52px 0}footer{border-top:1px solid #304258;font-size:14px}@media(max-width:700px){.grid{grid-template-columns:1fr}.hero{padding-top:26px}nav{flex-wrap:wrap}h1{letter-spacing:-1px}.lead{font-size:18px}}
+</style>
+</head>
+<body>
+<nav aria-label="Main"><a class="brand" href="./">ShrinkGate</a><div><a href="https://github.com/KotalaKishanReddy/shrinkgate">GitHub</a> · <a href="https://github.com/KotalaKishanReddy/shrinkgate/blob/main/docs/BENCHMARKS.md">Benchmarks</a> · <a href="https://github.com/KotalaKishanReddy/shrinkgate/releases">Releases</a></div></nav>
+<main>
+<div class="hero"><span class="tag">Local Rust gateway · Apache-2.0</span><h1>Stop sending identical<br>tool output twice.</h1><p class="lead">Coding agents can include repeated file reads and compiler output in a single request. ShrinkGate trims earlier duplicates and keeps the latest identical copy intact.</p><div class="buttons"><a class="button primary" href="https://github.com/KotalaKishanReddy/shrinkgate#try-it">Try the local demo</a><a class="button" href="https://github.com/KotalaKishanReddy/shrinkgate">Read the source →</a></div><p class="flow">Your coding agent → 127.0.0.1:18793 → Your model provider</p></div>
+<img src="demo.svg" alt="Local synthetic three-turn demo showing a fresh file read, repeated read and changed file; estimates are bytes divided by four.">
+<div class="grid"><div class="card"><h2>Runs locally</h2><p>No telemetry or extra account. Authentication is forwarded to your configured provider.</p></div><div class="card"><h2>Tools first</h2><p>User instructions, reasoning, system prompts and media are protected by default.</p></div><div class="card"><h2>Measure it</h2><p>Offline fixtures and JSON statistics make the transformation inspectable.</p></div></div>
+<section><h2>Inspect before connecting</h2><pre><code>cargo install --path . --locked   # From the cloned source repo
+shrinkgate demo
+shrinkgate connect claude --dry-run
+shrinkgate connect claude
+shrinkgate doctor
+shrinkgate stats --json</code></pre><p>Claude Code, Codex and OpenCode configuration helpers are included. Muse is experimental. New hardening features on main are unreleased; check the README for source and release installation options.</p></section>
+<section class="note"><h2>Smaller requests need honest measurements.</h2><p>History replay alone creates no savings. Duplicates must exist in the current request. Rewriting can invalidate prompt caches or change model behavior. Local byte estimates are not measured billing savings. Compare cache usage, billed cost and task success on your own workloads.</p><a href="https://github.com/KotalaKishanReddy/shrinkgate/blob/main/docs/BENCHMARKS.md">Read the measurement methodology →</a></section>
+<section><h2>Help make it dependable</h2><p>Share a sanitized compatibility report, contribute a realistic fixture, or help validate installation on your platform.</p><a href="https://github.com/KotalaKishanReddy/shrinkgate/blob/main/CONTRIBUTING.md">Contributing guide →</a></section>
+</main><footer>Open source under Apache-2.0. Not affiliated with Anthropic, OpenAI, Meta, or Context Shrink LLC. This page uses no analytics or third-party scripts.</footer>
+</body></html>

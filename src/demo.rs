@@ -14,7 +14,6 @@ use tokio::net::TcpListener;
 
 use crate::config::Config;
 use crate::server::{serve, AppState};
-use crate::store::Sessions;
 use crate::upstream::make_client;
 
 async fn mock_messages(
@@ -56,76 +55,56 @@ fn tool_result(id: &str, text: &str) -> Value {
 
 pub async fn run() -> anyhow::Result<()> {
     let upstream_port = spawn_mock().await;
-    let gateway_port = {
-        let l = TcpListener::bind(("127.0.0.1", 0)).await?;
-        let p = l.local_addr()?.port();
-        drop(l); // free the port so the gateway can bind it below
-        p
-    };
-
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let gateway_port = listener.local_addr()?.port();
     let cfg = Config {
         port: gateway_port,
         upstream_anthropic: format!("http://127.0.0.1:{upstream_port}"),
         ..Default::default()
     };
-    let state_dir = std::env::temp_dir().join("shrinkgate-demo");
-    let _ = std::fs::remove_dir_all(&state_dir);
+    let temp = tempfile::tempdir()?;
+    let state_dir = temp.path().to_path_buf();
     let state = Arc::new(AppState {
         clt: make_client(),
-        sessions: Sessions::new(1024),
         state_dir: state_dir.clone(),
         cfg: cfg.clone(),
     });
 
-    let listener = TcpListener::bind(("127.0.0.1", gateway_port)).await?;
     tokio::spawn(async move {
         let _ = serve(listener, state).await;
     });
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let clt = make_client();
     let big = "fn process_payment(amount: u64, currency: &str) -> Result<Receipt, PayError> {\n    let rate = fx_rate(currency, \"USD\")?;\n    let total = (amount as f64 * rate) as u64;\n    validate(total)?;\n    ledger.record(total, currency)?;\n    Ok(Receipt { total, currency: currency.to_string() })\n}\n".repeat(24);
     let system = json!([{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."}]);
     let meta = json!({"user_id": "demo-session-1"});
 
-    let turns: Vec<(&str, Value)> = vec![
-        (
-            "turn 1: read payments.rs (fresh read)",
-            json!({
-                "model": "claude-sonnet-4-5", "max_tokens": 64, "stream": true,
-                "system": system, "metadata": meta,
-                "messages": [
-                    {"role": "user", "content": [tool_result("t1", &big)]}
-                ]
-            }),
-        ),
-        (
-            "turn 2: same history resent + a follow-up",
-            json!({
-                "model": "claude-sonnet-4-5", "max_tokens": 64, "stream": true,
-                "system": system, "metadata": meta,
-                "messages": [
-                    {"role": "user", "content": [tool_result("t1", &big)]},
-                    {"role": "assistant", "content": [{"type": "text", "text": "I'll fix the fx rate handling."}]},
-                    {"role": "user", "content": [tool_result("t1", &big)]}
-                ]
-            }),
-        ),
-        (
-            "turn 3: history resent again, file edited once",
-            json!({
-                "model": "claude-sonnet-4-5", "max_tokens": 64, "stream": true,
-                "system": system, "metadata": meta,
-                "messages": [
-                    {"role": "user", "content": [tool_result("t1", &big)]},
-                    {"role": "assistant", "content": [{"type": "text", "text": "I'll fix the fx rate handling."}]},
-                    {"role": "user", "content": [tool_result("t1", &big)]},
-                    {"role": "assistant", "content": [{"type": "text", "text": "Edited and re-read."}]},
-                    {"role": "user", "content": [tool_result("t2", &big.replace("fx_rate", "fx_rate_v2"))]}
-                ]
-            }),
-        ),
+    let call = |id: &str| json!({"role": "assistant", "content": [{"type":"tool_use", "id": id, "name":"read_file", "input":{"path":"payments.rs"}}]});
+    let mut history = vec![
+        json!({"role":"user", "content":"Inspect payments.rs"}),
+        call("t1"),
+        json!({"role":"user", "content":[tool_result("t1", &big)]}),
     ];
+    let mut turns = Vec::new();
+    for (label, id, text) in [
+        ("turn 1: fresh read", "t1", big.clone()),
+        ("turn 2: repeated read", "t2", big.clone()),
+        (
+            "turn 3: changed file",
+            "t3",
+            big.replace("fx_rate", "fx_rate_v2"),
+        ),
+    ] {
+        if id != "t1" {
+            history.push(call(id));
+            history.push(json!({"role":"user", "content":[tool_result(id, &text)]}));
+        }
+        turns.push((
+            label,
+            json!({"model":"fixture-model", "max_tokens":64, "stream":true,
+            "system":system, "metadata":meta, "messages":history.clone()}),
+        ));
+    }
 
     println!("ShrinkGate demo — gateway :{gateway_port} → mock upstream :{upstream_port}\n");
     println!(
@@ -133,7 +112,7 @@ pub async fn run() -> anyhow::Result<()> {
         "request", "est.in", "sent.in", "saved", "upstream"
     );
     let mut total_saved = 0usize;
-    for (label, body) in &turns {
+    for (index, (label, body)) in turns.iter().enumerate() {
         let req = hyper::Request::builder()
             .method("POST")
             .uri(format!("http://127.0.0.1:{gateway_port}/v1/messages"))
@@ -144,17 +123,34 @@ pub async fn run() -> anyhow::Result<()> {
                 body,
             )?)))?;
         let resp = clt.request(req).await?;
+        anyhow::ensure!(
+            resp.status().is_success(),
+            "demo request failed: {}",
+            resp.status()
+        );
         // Drain the SSE stream (gateway taps usage in parallel).
         let mut stream = resp.into_body().into_data_stream();
         while let Some(chunk) = stream.next().await {
             let _ = chunk?;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        // Read the latest journal record.
-        let file = crate::paths::usage_file(&state_dir.to_path_buf());
-        let text = std::fs::read_to_string(&file).unwrap_or_default();
-        let last = text.lines().last().unwrap_or("{}");
-        let rec: Value = serde_json::from_str(last)?;
+        // Journaling runs off the network executor; wait for this request's record.
+        let file = crate::paths::usage_file(&state_dir);
+        let rec: Value = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let text = std::fs::read_to_string(&file).unwrap_or_default();
+                if text.lines().count() == index + 1 {
+                    break serde_json::from_str(text.lines().last().unwrap()).unwrap();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        anyhow::ensure!(rec["status"] == 200, "demo stream failed");
+        let blocks = rec["blocks"].as_u64().unwrap_or(0);
+        anyhow::ensure!(
+            blocks == if index == 0 { 0 } else { 1 },
+            "unexpected duplicate count: {blocks}"
+        );
         let est = rec.get("est_orig").and_then(Value::as_u64).unwrap_or(0);
         let sent = rec.get("est_sent").and_then(Value::as_u64).unwrap_or(0);
         let saved = rec.get("saved_tokens").and_then(Value::as_u64).unwrap_or(0);
@@ -168,7 +164,7 @@ pub async fn run() -> anyhow::Result<()> {
             label, est, sent, saved, upstream
         );
     }
-    println!("\nTotal estimated savings this demo: −{total_saved} tokens (deterministic stubs, prompt-cache friendly).");
+    println!("\nTotal estimated savings this demo: −{total_saved} tokens (bytes/4 estimate; synthetic fixture, not measured billing savings).");
     println!(
         "Journal: {}",
         crate::paths::usage_file(&state_dir).display()

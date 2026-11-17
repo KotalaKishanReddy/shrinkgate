@@ -9,7 +9,7 @@ Thank you for your interest in contributing to ShrinkGate! We welcome bug report
 ### Prerequisites
 - **Rust**: Version 1.85 or newer (`rustup update stable`)
 - **Cargo**: Standard package manager included with Rust
-- **Linux**: Primary target OS (systemd user units, Linux loopback IPC)
+- **Platforms**: Linux, macOS and Windows; services are platform-specific
 
 ### Cloning & Building
 
@@ -19,10 +19,10 @@ git clone https://github.com/KotalaKishanReddy/shrinkgate.git
 cd shrinkgate
 
 # Build in debug mode
-cargo build
+cargo build --locked
 
 # Run the test suite
-cargo test
+cargo test --locked
 
 # Run the self-contained end-to-end integration demo
 cargo run -- demo
@@ -40,12 +40,12 @@ Before submitting a Pull Request, ensure that your changes satisfy all checks:
    ```
 2. **Clippy Linter**:
    ```sh
-   cargo clippy -- -D warnings
+   cargo clippy --all-targets --locked -- -D warnings
    ```
 3. **Tests**:
    All unit and integration tests must pass cleanly:
    ```sh
-   cargo test --release
+   cargo test --release --locked
    ```
 
 ---
@@ -59,7 +59,7 @@ shrinkgate/
 │   ├── server.rs          # Hyper HTTP engine on 127.0.0.1:18793
 │   ├── config.rs          # TOML configuration loader (~/.config/shrinkgate/config.toml)
 │   ├── upstream.rs        # Hyper-rustls client, TLS pools, header forwarding
-│   ├── store.rs           # Session cache, fingerprinting (ring SHA-256), usage journal
+│   ├── store.rs           # Stateless fingerprinting (ring SHA-256), usage journal
 │   ├── paths.rs           # XDG base directories & agent config paths
 │   ├── statusline.rs      # Daily savings formatter for terminal statuslines
 │   ├── demo.rs            # Mock upstream & multi-turn integration test
@@ -90,11 +90,11 @@ shrinkgate/
 
 ## Maintainer Release Process
 
-To publish a new release across GitHub, Crates.io, and GHCR:
+Read [compatibility release gates](docs/COMPATIBILITY.md) first. GitHub/GHCR publishing is tag-driven; crates.io publication is manual:
 
 1. **Verify All Checks**:
    ```sh
-   cargo fmt --check && cargo clippy -- -D warnings && cargo test --release
+   cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --release --locked
    ```
 2. **Bump Version**: Update `version = "x.y.z"` in `Cargo.toml` and log changes in `CHANGELOG.md`.
 3. **Commit, Tag & Push**:

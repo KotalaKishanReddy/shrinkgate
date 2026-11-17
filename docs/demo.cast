@@ -1,0 +1,9 @@
+{"version": 2, "width": 122, "height": 11, "timestamp": 1794922128, "title": "ShrinkGate synthetic local fixture; paced replay"}
+[0.0, "o", "$ shrinkgate demo\r\n"]
+[0.75, "o", "Synthetic loopback fixture · no API keys\r\n"]
+[1.5, "o", "request                                         est.in   sent.in     saved  upstream\r\n"]
+[2.25, "o", "turn 1: fresh read                                1722      1722         0      1887\r\n"]
+[3.0, "o", "turn 2: repeated read                             3444      1764      1679      1979\r\n"]
+[3.75, "o", "turn 3: changed file                              5184      3504      1679      3822\r\n"]
+[4.5, "o", "Total estimated savings this demo: −3358 tokens (bytes/4 estimate; synthetic fixture, not measured billing savings).\r\n"]
+[5.25, "o", "Estimates = candidate bytes / 4. Not measured billing savings.\r\n"]

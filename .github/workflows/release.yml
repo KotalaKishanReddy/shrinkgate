@@ -32,7 +32,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Validate tag and package version
+        shell: bash
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test "$GITHUB_REF_NAME" = "v$VERSION"
+      - name: Test release
+        run: cargo test --locked --release
       - name: Package release tarball (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -80,6 +87,7 @@ jobs:
             sha256sums.txt
 
   image:
+    needs: [build-binaries]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -88,6 +88,14 @@ mod platform {
         service_file_path().exists()
     }
 
+    fn xml_escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('\"', "&quot;")
+            .replace('\'', "&apos;")
+    }
+
     /// Generates launchd LaunchAgent plist and loads it with `launchctl`.
     pub fn install(bin: &Path) -> bool {
         let path = service_file_path();
@@ -127,9 +135,9 @@ mod platform {
 </dict>
 </plist>
 "#,
-            bin = bin_str,
-            err = err_log.to_string_lossy(),
-            out = out_log.to_string_lossy()
+            bin = xml_escape(&bin_str),
+            err = xml_escape(&err_log.to_string_lossy()),
+            out = xml_escape(&out_log.to_string_lossy())
         );
 
         if std::fs::write(&path, plist).is_err() {

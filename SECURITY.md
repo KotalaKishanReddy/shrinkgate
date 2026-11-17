@@ -1,42 +1,27 @@
-# Security Policy
+# Security policy
 
-ShrinkGate takes the privacy, confidentiality, and security of your coding agent traffic and developer credentials seriously.
+Report vulnerabilities privately through [GitHub advisories](https://github.com/KotalaKishanReddy/shrinkgate/security/advisories/new). Do not include credentials in public issues. Only the latest released 0.1.x revision receives fixes; changes on `main` may not be released yet.
 
-## Supported Versions
+## Intended deployment
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+A trusted, single-user workstation. ShrinkGate binds IPv4 loopback only. It is not an authenticated multi-tenant service, sandbox, or protection against malicious programs under your account. Do not publish its port or use a public reverse proxy. Docker requires host networking and uses an unprivileged runtime user.
 
-## Reporting a Vulnerability
+Browser Origin requests and Host headers other than the configured loopback address are rejected. There is no CORS opt-in. Other local clients can still connect; protecting the workstation and account remains necessary.
 
-If you discover a security vulnerability or sensitive defect in ShrinkGate, please report it privately:
+## Traffic and credentials
 
-1. **GitHub Security Advisory**: Use the [Private Vulnerability Reporting](https://github.com/KotalaKishanReddy/shrinkgate/security/advisories/new) feature on GitHub.
-2. **Alternative**: Contact the maintainer via GitHub profile or email.
+Requests leave your machine for the configured model provider. There is no telemetry, analytics, license service, or extra forwarding destination. Configured upstreams require HTTPS with Rustls/webpki roots, except loopback HTTP for local providers/testing. Custom upstreams receive your agent's forwarded auth headers: configure only trusted endpoints. Enterprise private CAs and HTTP proxies are not automatically configured.
 
-Please **do not** file public GitHub issues for security vulnerabilities. We will review and respond promptly.
+Hop-by-hop headers, Connection-nominated headers and internal routing headers are removed before forwarding. Compressed incoming bodies are rejected. Resource limits/timeouts are documented in the README; SSE streams have no fixed duration, and shutdown drains for 10 seconds. These controls do not make an exposed gateway appropriate for hostile traffic.
 
----
+## Local storage
 
-## Security Architecture & Threat Model
+Prompt bodies and auth headers are not journaled. Usage journals include timestamps, route, a derived session fingerprint, status, latency, byte estimates and provider-reported usage. The fingerprint is pseudonymous metadata, not guaranteed anonymous. Journals rotate at approximately 8 MiB, with one previous file retained. Unix journal/config files use owner-only permissions; Windows relies on profile ACLs.
 
-ShrinkGate is engineered with defense-in-depth principles:
+**Agent recovery snapshots can contain secrets already present in your original agent settings.** They are needed for rollback and are written atomically with private Unix permissions. Protect the entire state directory and backups. Configuration commands take a process lock. Reconnect preserves original snapshots; externally edited settings are retained. Symlink destinations are refused rather than silently replaced. Atomic rename protects each file, but a power failure between the recovery write and agent write is not a multi-file transaction: keep the saved snapshot for manual recovery.
 
-### 1. Local-Only Loopback Binding
-- ShrinkGate strictly binds to `127.0.0.1:<port>`. It never listens on `0.0.0.0` or public network interfaces.
-- When running in Docker, `--network host` is required so that traffic never crosses external container bridges.
+## Transformation limits
 
-### 2. Upstream TLS & Certificate Verification
-- All upstream connections (Anthropic, OpenAI, Meta, OpenCode) require TLS with Mozilla's root certificates via `webpki-roots` and Rustls.
-- Hop-by-hop headers and internal proxy headers (`x-shrinkgate-*`) are strictly stripped before forwarding.
+Only sufficiently large repeated tool-output text is eligible by default. User/assistant prose requires explicit opt-in. System/developer prompts, schemas, reasoning and media are protected. The newest identical candidate and configured tail remain intact. Deduplication is stateless and uses full SHA-256; it does not remove a sole copy based on earlier requests.
 
-### 3. Credential & Privacy Guarantees
-- **No telemetry / no accounts**: ShrinkGate has zero analytics, zero external logging, and no license server.
-- **Pass-through authentication**: Your API keys and ChatGPT authorization tokens pass through directly to official provider APIs. ShrinkGate never writes API keys or secrets to disk.
-- **Local usage journal**: Usage metadata (`~/.local/state/shrinkgate/usage.jsonl`) contains only request status, latency, and token totals—never prompt text, code, or secret headers.
-
-### 4. Deterministic & Safe Rewriting
-- ShrinkGate replaces duplicate content blocks with deterministic, structured stubs.
-- System prompts, tool definitions, reasoning/thinking traces, and media/image payloads are **never** altered or trimmed.
-- High-recency messages (the newest `keep_last_messages`) are protected and always sent verbatim.
+Retaining identical content does not guarantee unchanged model behavior. Historical ordering changes can affect answers; rewriting can invalidate prompt caches and increase billed cost. Test your workloads. No security certification, semantic-equivalence guarantee, or live-provider acceptance is implied.

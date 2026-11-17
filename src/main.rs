@@ -5,8 +5,10 @@
 //! agents address as their model API, trimming content they resend every turn
 //! before forwarding to the real upstream with the agent's own auth.
 
+mod benchmark;
 mod config;
 mod demo;
+mod diagnostics;
 mod paths;
 mod server;
 mod shrink;
@@ -33,7 +35,7 @@ struct Cli {
 enum Cmd {
     /// Run the gateway engine (usually as a systemd user service).
     Serve {
-        #[arg(long, env = "SHRINKGATE_PORT")]
+        #[arg(long, env = "SHRINKGATE_PORT", value_parser = clap::value_parser!(u16).range(1..))]
         port: Option<u16>,
         /// Used by the SessionStart hook: start the engine if it is not running.
         #[arg(long)]
@@ -47,6 +49,9 @@ enum Cmd {
     Connect {
         /// claude | codex | opencode | muse
         agent: String,
+        /// Preview the exact proposed agent configuration without writing files.
+        #[arg(long)]
+        dry_run: bool,
         #[arg(long)]
         force: bool,
         /// Claude Code: cap the auto-compact window at 200k tokens.
@@ -63,10 +68,17 @@ enum Cmd {
     },
     /// Show connection status, engine health and savings.
     Status { agent: Option<String> },
+    /// Diagnose local engine identity, configuration and agent wiring (no API keys sent).
+    Doctor,
+    /// Local estimated reductions and provider-reported usage (never a billing guarantee).
+    Stats {
+        #[arg(long)]
+        json: bool,
+    },
     /// Undo a connect: restore the agent's original settings.
     Uninstall {
         agent: String,
-        /// Also stop the engine, remove the service, binary and all state.
+        /// Remove binary/state after every integration is disconnected and the engine is stopped.
         #[arg(long)]
         purge: bool,
     },
@@ -84,12 +96,25 @@ enum Cmd {
     Statusline,
     /// End-to-end demo against a mock upstream (no keys needed).
     Demo,
+    /// Benchmark local transformations on synthetic fixtures or one private request JSON.
+    Benchmark {
+        #[arg(long)]
+        input: Option<std::path::PathBuf>,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u16).range(1..=10000))]
+        iterations: u16,
+    },
 }
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let cfg = Config::load();
+    let cfg = match Config::load() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("shrinkgate configuration: {e:#}");
+            std::process::exit(1);
+        }
+    };
     let cfg = match &cli.cmd {
         Cmd::Serve {
             port, no_shrink, ..
@@ -123,14 +148,15 @@ async fn main() {
             statusline,
             no_service,
             env_key,
+            dry_run,
         } => match connect_agent(
             &cfg,
             agent,
             *force,
-            *lean,
-            *statusline,
+            (*lean, *statusline),
             *no_service,
             env_key.as_deref(),
+            *dry_run,
         )
         .await
         {
@@ -141,10 +167,15 @@ async fn main() {
             }
         },
         Cmd::Status { agent } => {
-            print_status(&cfg, agent.as_deref());
+            print_status(&cfg, agent.as_deref()).await;
             0
         }
-        Cmd::Uninstall { agent, purge } => match uninstall_agent(agent, *purge) {
+        Cmd::Doctor => diagnostics::doctor(&cfg).await,
+        Cmd::Stats { json } => {
+            diagnostics::stats(*json);
+            0
+        }
+        Cmd::Uninstall { agent, purge } => match uninstall_agent(agent, *purge).await {
             Ok(ok) => {
                 if ok {
                     0
@@ -157,7 +188,10 @@ async fn main() {
                 1
             }
         },
-        Cmd::Lean { action, force } => match wire::claude::lean(action, *force) {
+        Cmd::Lean { action, force } => match (|| {
+            let _lock = wire::config_lock()?;
+            wire::claude::lean(action, *force)
+        })() {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("shrinkgate lean: {e:#}");
@@ -176,6 +210,15 @@ async fn main() {
             println!("{}", statusline::run());
             0
         }
+        Cmd::Benchmark { input, iterations } => {
+            match benchmark::run(input.clone(), *iterations as usize) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("benchmark: {e:#}");
+                    1
+                }
+            }
+        }
         Cmd::Demo => match demo::run().await {
             Ok(()) => 0,
             Err(e) => {
@@ -191,16 +234,31 @@ async fn connect_agent(
     cfg: &Config,
     agent: &str,
     force: bool,
-    lean: bool,
-    statusline: bool,
+    claude_options: (bool, bool),
     no_service: bool,
     env_key: Option<&str>,
+    dry_run: bool,
 ) -> anyhow::Result<()> {
+    let (lean, statusline) = claude_options;
+    let _lock = if dry_run {
+        None
+    } else {
+        Some(wire::config_lock()?)
+    };
     match agent {
-        "claude" => wire::claude::connect(cfg, force, lean, statusline, no_service).await,
-        "codex" => wire::codex::connect(cfg, force, env_key.map(|s| s.to_string())).await,
-        "opencode" => wire::opencode::connect(cfg, force).await,
-        "muse" => wire::muse::connect(cfg).await,
+        "claude" => wire::claude::connect(cfg, force, lean, statusline, no_service, dry_run).await,
+        "codex" => {
+            wire::codex::connect(
+                cfg,
+                force,
+                env_key.map(|s| s.to_string()),
+                dry_run,
+                no_service,
+            )
+            .await
+        }
+        "opencode" => wire::opencode::connect(cfg, force, dry_run, no_service).await,
+        "muse" => wire::muse::connect(cfg, dry_run).await,
         other => Err(anyhow::anyhow!(
             "unknown agent {other:?} (claude | codex | opencode | muse). \
              For anything else, run `shrinkgate env` and point the agent's base URL at the engine."
@@ -208,19 +266,50 @@ async fn connect_agent(
     }
 }
 
-fn uninstall_agent(agent: &str, purge: bool) -> anyhow::Result<bool> {
-    let cfg = Config::load();
-    match agent {
-        "claude" => wire::claude::uninstall(&cfg, purge),
+async fn uninstall_agent(agent: &str, purge: bool) -> anyhow::Result<bool> {
+    let _lock = wire::config_lock()?;
+    let cfg = Config::load()?;
+    let restored = match agent {
+        "claude" => wire::claude::uninstall(&cfg),
         "codex" => wire::codex::uninstall(),
         "opencode" => wire::opencode::uninstall(),
         "muse" => wire::muse::uninstall(),
         other => Err(anyhow::anyhow!("unknown agent {other:?}")),
+    }?;
+    if restored && purge {
+        anyhow::ensure!(
+            wire::no_other_wires(None),
+            "settings restored; other integrations remain connected, so binary/state were kept"
+        );
+        wire::systemd::remove();
+        let active = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::net::TcpStream::connect(("127.0.0.1", cfg.port)),
+        )
+        .await;
+        anyhow::ensure!(!matches!(active, Ok(Ok(_))), "settings restored; an engine is still listening. Stop it before purging the binary/state");
+        if paths::bin_install_path().exists() {
+            std::fs::remove_file(paths::bin_install_path())?;
+        }
+        // Keep the held lock file; Windows does not allow unlinking a locked file.
+        for entry in std::fs::read_dir(paths::state_dir())? {
+            let entry = entry?;
+            if entry.file_name() == "config.lock" {
+                continue;
+            }
+            if entry.file_type()?.is_dir() {
+                std::fs::remove_dir_all(entry.path())?;
+            } else {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+        println!("Purged binary and local state (configuration lock retained).");
     }
+    Ok(restored)
 }
 
-fn print_status(cfg: &Config, agent: Option<&str>) {
-    let healthy = futures_block_on_health(cfg.port);
+async fn print_status(cfg: &Config, agent: Option<&str>) {
+    let healthy = wire::engine_healthy(cfg.port).await;
     println!(
         "engine: {} at {} (shrink: {})",
         if healthy { "running" } else { "NOT running" },
@@ -228,7 +317,7 @@ fn print_status(cfg: &Config, agent: Option<&str>) {
         cfg.shrink
     );
     let (today_s, today_n, all_s, all_n) = store::totals(&paths::state_dir());
-    println!("savings: −{today_s} tok today ({today_n} req) · −{all_s} tok all time ({all_n} req)");
+    println!("estimated reductions (UTC): −{today_s} tok today ({today_n} req) · −{all_s} est. tok retained ({all_n} req)");
     match agent {
         Some("claude") => println!("{}", wire::claude::status(cfg)),
         Some("codex") => println!("{}", wire::codex::status()),
@@ -250,16 +339,6 @@ fn print_status(cfg: &Config, agent: Option<&str>) {
             }
         }
     }
-}
-
-/// Blocking health probe for the status command.
-fn futures_block_on_health(port: u16) -> bool {
-    // The CLI is async; use a tiny one-shot runtime-free probe instead.
-    std::net::TcpStream::connect_timeout(
-        &format!("127.0.0.1:{port}").parse().unwrap(),
-        std::time::Duration::from_millis(500),
-    )
-    .is_ok()
 }
 
 fn print_env(cfg: &Config) {
@@ -286,6 +365,7 @@ fn print_config(cfg: &Config) {
     println!("min_block_bytes:     {}", cfg.min_block_bytes);
     println!("keep_last_messages:  {}", cfg.keep_last_messages);
     println!("allow_assistant_text:{}", cfg.allow_assistant_text);
+    println!("allow_user_text:     {}", cfg.allow_user_text);
     println!("upstream_anthropic:  {}", cfg.upstream_anthropic);
     println!("upstream_openai:     {}", cfg.upstream_openai);
     println!("upstream_meta:       {}", cfg.upstream_meta);

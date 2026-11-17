@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Enforce body limits during reads, add connection/header/read timeouts, bound concurrent connections and drain on SIGTERM/Ctrl+C.
+- Use full SHA-256, short accurate stubs and request-local deduplication: remove persistent session maps and the global transform lock; do not expand short blocks.
+- Deduplicate tool outputs by default; user/assistant text is opt-in. Preserve mixed-media chat messages.
+- Atomically write private recovery data before agent changes; preserve backups on reconnect; serialize configuration commands and retain externally changed settings.
+- Fix Claude lean-off isolation, OpenCode Meta routing, provider shape validation, upstream override priority, hop-by-hop header filtering and daemon identity checks.
+- Separate estimated successful-request reductions from provider usage; mark cancelled streams and rotate journals.
+- Add dry runs, doctor, JSON stats, offline fixture benchmarks, regression tests, verified installers, documented release gates and a project page.
+- Add MSRV/dependency/container CI checks and validate release tag/version consistency.
+- Remove unsupported savings/cache/privacy claims. No live-provider billing or agent-version certification is implied.
+
 All notable changes to **ShrinkGate** will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

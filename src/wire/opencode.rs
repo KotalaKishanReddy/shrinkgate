@@ -7,9 +7,7 @@ use serde_json::{json, Value};
 
 use crate::config::Config;
 use crate::paths;
-use crate::wire::{
-    ensure_bin, ensure_engine, now_iso, read_json_file, wire_state_file, write_json_private,
-};
+use crate::wire::{ensure_bin, ensure_engine, now_iso, read_json_file, wire_state_file};
 
 fn refuse(msg: &str) -> anyhow::Error {
     anyhow::anyhow!("{msg} No settings were changed.")
@@ -44,7 +42,7 @@ fn provider_block(cfg: &Config) -> Value {
         "shrinkgate-meta": {
             "npm": "@ai-sdk/openai",
             "name": "ShrinkGate (Meta Muse)",
-            "options": { "baseURL": base, "apiKey": "{env:MODEL_API_KEY}" },
+            "options": { "baseURL": base, "apiKey": "{env:MODEL_API_KEY}", "headers": {"x-shrinkgate-upstream": "meta"} },
             "models": {
                 "muse-spark-1.3": { "name": "Muse Spark 1.3" },
                 "muse-wonder-1.0": { "name": "Muse Wonder 1.0" }
@@ -68,13 +66,17 @@ fn provider_block(cfg: &Config) -> Value {
     })
 }
 
-pub async fn connect(cfg: &Config, force: bool) -> anyhow::Result<()> {
-    ensure_bin()?;
-    if !ensure_engine(cfg).await? {
-        return Err(refuse("the ShrinkGate engine did not start"));
-    }
+pub async fn connect(
+    cfg: &Config,
+    force: bool,
+    dry_run: bool,
+    no_service: bool,
+) -> anyhow::Result<()> {
     let path = config_path();
-    let original = std::fs::read_to_string(&path).ok();
+    if crate::wire::already_connected("opencode", &path)? {
+        return Ok(());
+    }
+    let original = crate::wire::read_optional(&path)?;
     let mut doc: Value = match &original {
         Some(text) => {
             serde_json::from_str(text).map_err(|_| refuse("opencode.json is not valid JSON"))?
@@ -91,17 +93,21 @@ pub async fn connect(cfg: &Config, force: bool) -> anyhow::Result<()> {
     } else {
         "provider"
     };
-    let existing = doc
-        .get(provider_key)
-        .and_then(|p| p.get("shrinkgate"))
-        .cloned();
-    if existing.is_some()
-        && !force
-        && existing != Some(provider_block(cfg).get("shrinkgate").unwrap().clone())
-    {
-        return Err(refuse(
-            "a shrinkgate provider already exists with different settings (use --force to replace)",
-        ));
+    if let Some(providers) = doc.get(provider_key) {
+        if !providers.is_object() {
+            return Err(refuse("provider must be a JSON object"));
+        }
+        if !force
+            && provider_block(cfg)
+                .as_object()
+                .unwrap()
+                .keys()
+                .any(|k| providers.get(k).is_some())
+        {
+            return Err(refuse(
+                "a ShrinkGate provider already exists; use --force to replace",
+            ));
+        }
     }
     let block = provider_block(cfg);
     let providers = doc
@@ -116,12 +122,21 @@ pub async fn connect(cfg: &Config, force: bool) -> anyhow::Result<()> {
             .insert(k.clone(), v.clone());
     }
     let written = serde_json::to_string_pretty(&doc)? + "\n";
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    if dry_run {
+        crate::wire::preview(&path, &written);
+        return Ok(());
     }
-    std::fs::write(&path, &written)?;
-    write_json_private(
-        &wire_state_file("opencode"),
+    let bin = ensure_bin()?;
+    if !no_service {
+        crate::wire::systemd::install(&bin);
+    }
+    if !ensure_engine(cfg).await? {
+        return Err(refuse("the ShrinkGate engine did not start"));
+    }
+    crate::wire::persist_connection(
+        "opencode",
+        &path,
+        &written,
         &json!({
             "version": 1,
             "connected_at": now_iso(),
@@ -158,7 +173,7 @@ pub fn status() -> String {
 
 pub fn uninstall() -> anyhow::Result<bool> {
     let state_file = wire_state_file("opencode");
-    let Some(state) = read_json_file(&state_file) else {
+    let Some(state) = crate::wire::read_state("opencode")? else {
         println!("Not connected by ShrinkGate. Nothing to restore for OpenCode.");
         return Ok(crate::wire::no_other_wires(None));
     };
@@ -174,7 +189,7 @@ pub fn uninstall() -> anyhow::Result<bool> {
         return Ok(false);
     }
     match original {
-        Some(text) => std::fs::write(&path, text)?,
+        Some(text) => crate::wire::atomic_write(&path, text.as_bytes())?,
         None => {
             let _ = std::fs::remove_file(&path);
         }

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::config::Config;
 use crate::shrink::{is_stub_text, stub_text, ShrinkStat};
-use crate::store::{fingerprint, Seen, Session};
+use crate::store::fingerprint;
 
 /// Session key: model + system prompt + Claude Code's per-session metadata id.
 /// Requests sharing this key share one dedup store.
@@ -36,7 +36,7 @@ struct Cand {
 }
 
 /// Rewrites `body` in place. Deterministic given (body, session state).
-pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkStat {
+pub fn transform(body: &mut Value, cfg: &Config) -> ShrinkStat {
     let mut stat = ShrinkStat::default();
     if !cfg.shrink {
         return stat;
@@ -63,13 +63,13 @@ pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkSt
         };
         for (bi, block) in blocks.iter().enumerate() {
             let btype = block.get("type").and_then(Value::as_str).unwrap_or("");
-            let (fp_src, bytes, tool_result) = if btype == "tool_result" {
+            let (fp, bytes, tool_result) = if btype == "tool_result" {
                 match block.get("content") {
                     Some(Value::String(s)) => {
                         if is_stub_text(s) {
                             continue;
                         }
-                        (format!("tr\x00{s}"), s.len(), true)
+                        (fingerprint(&[b"tool/text", s.as_bytes()]), s.len(), true)
                     }
                     Some(Value::Array(parts)) => {
                         // Mixed-media tool results are never stubbed; pure-text ones are.
@@ -87,30 +87,33 @@ pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkSt
                         }) {
                             continue;
                         }
-                        let joined = parts
-                            .iter()
-                            .filter_map(|p| p.get("text").and_then(Value::as_str))
-                            .collect::<Vec<_>>()
-                            .join("\n\u{0}");
-                        (format!("tr\x00{joined}"), joined.len(), true)
+                        let mut texts: Vec<&[u8]> = vec![b"tool/parts"];
+                        let mut bytes = 0;
+                        for part in parts {
+                            let Some(text) = part.get("text").and_then(Value::as_str) else {
+                                continue;
+                            };
+                            bytes += text.len();
+                            texts.push(text.as_bytes());
+                        }
+                        (fingerprint(&texts), bytes, true)
                     }
                     _ => continue,
                 }
-            } else if btype == "text" {
+            } else if btype == "text" && (cfg.allow_user_text || assistant_ok) {
                 let Some(s) = block.get("text").and_then(Value::as_str) else {
                     continue;
                 };
                 if is_stub_text(s) {
                     continue;
                 }
-                (format!("t\x00{s}"), s.len(), false)
+                (fingerprint(&[b"text", s.as_bytes()]), s.len(), false)
             } else {
                 continue;
             };
             if bytes < cfg.min_block_bytes {
                 continue;
             }
-            let fp = fingerprint(&[fp_src.as_bytes()]);
             cands.push(Cand {
                 mi,
                 bi,
@@ -125,27 +128,20 @@ pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkSt
     }
 
     // Occurrence map: fingerprint -> (count, index of last occurrence).
-    let mut count: HashMap<String, usize> = HashMap::new();
-    let mut last: HashMap<String, usize> = HashMap::new();
+    let mut last: HashMap<&str, usize> = HashMap::new();
     for (ci, c) in cands.iter().enumerate() {
-        *count.entry(c.fp.clone()).or_default() += 1;
-        last.insert(c.fp.clone(), ci);
+        last.insert(&c.fp, ci);
     }
 
     // Pass 2: register first-seen, stub every non-latest duplicate outside the
     // keep-last window.
     for (ci, c) in cands.iter().enumerate() {
-        let seen_turn = sess
-            .seen
-            .entry(c.fp.clone())
-            .or_insert(Seen { turn: sess.turn })
-            .turn;
         stat.est_orig_bytes += c.bytes;
-        let is_last = last.get(&c.fp) == Some(&ci);
+        let is_last = last.get(c.fp.as_str()) == Some(&ci);
         let in_window = keep > 0 && c.mi >= n.saturating_sub(keep);
-        let dup = count.get(&c.fp).copied().unwrap_or(0) > 1 && !is_last && !in_window;
+        let stub = stub_text(&c.fp, c.bytes);
+        let dup = !is_last && !in_window && stub.len() < c.bytes;
         if dup {
-            let stub = stub_text(seen_turn, c.bytes);
             let stub_len = stub.len();
             let block_path = format!("/messages/{}/content/{}", c.mi, c.bi);
             let replaced = if c.tool_result {
@@ -168,7 +164,6 @@ pub fn transform(body: &mut Value, sess: &mut Session, cfg: &Config) -> ShrinkSt
             stat.est_sent_bytes += c.bytes;
         }
     }
-    sess.turn += 1;
     stat
 }
 
@@ -179,7 +174,10 @@ mod tests {
     use serde_json::json;
 
     fn cfg() -> Config {
-        Config::default()
+        Config {
+            allow_user_text: true,
+            ..Config::default()
+        }
     }
 
     fn big(id: &str) -> Value {
@@ -192,9 +190,9 @@ mod tests {
 
     #[test]
     fn single_occurrence_is_kept_verbatim() {
-        let (c, mut s) = (cfg(), Session::default());
+        let c = cfg();
         let mut body = json!({"model": "m", "messages": [user_msg(vec![big("t1")])]});
-        let stat = transform(&mut body, &mut s, &c);
+        let stat = transform(&mut body, &c);
         assert_eq!(stat.blocks_stubbed, 0);
         assert!(body["messages"][0]["content"][0]["content"]
             .as_str()
@@ -204,13 +202,13 @@ mod tests {
 
     #[test]
     fn duplicate_in_one_request_stubs_earlier_keeps_latest() {
-        let (c, mut s) = (cfg(), Session::default());
+        let c = cfg();
         let mut body = json!({"model": "m", "messages": [
             user_msg(vec![big("t1")]),
             json!({"role": "assistant", "content": [{"type": "text", "text": "ok"}]}),
             user_msg(vec![big("t1")]),
         ]});
-        let stat = transform(&mut body, &mut s, &c);
+        let stat = transform(&mut body, &c);
         assert_eq!(stat.blocks_stubbed, 1);
         assert!(stat.saved_bytes > 0);
         assert!(body["messages"][0]["content"][0]["content"]
@@ -227,25 +225,25 @@ mod tests {
     #[test]
     fn stubs_are_deterministic_across_sessions() {
         let mk = || {
-            let (c, mut s) = (cfg(), Session::default());
+            let c = cfg();
             let mut body = json!({"model": "m", "messages": [
                 user_msg(vec![big("t1")]),
                 user_msg(vec![big("t1")]),
                 json!({"role": "assistant", "content": [{"type": "text", "text": "ok"}]}),
             ]});
-            transform(&mut body, &mut s, &c);
+            transform(&mut body, &c);
             body["messages"][0]["content"][0]["content"]
                 .as_str()
                 .unwrap()
                 .to_string()
         };
         assert_eq!(mk(), mk());
-        assert!(mk().contains("request #1"));
+        assert!(mk().contains("sha256:") && mk().contains("later in this request"));
     }
 
     #[test]
     fn keep_last_window_protects_recent_duplicates() {
-        let (mut c, mut s) = (cfg(), Session::default());
+        let mut c = cfg();
         c.keep_last_messages = 2;
         // Both occurrences sit inside the last 2 messages: nothing is stubbed.
         let mut body = json!({"model": "m", "messages": [
@@ -253,13 +251,13 @@ mod tests {
             user_msg(vec![big("t1")]),
             user_msg(vec![big("t1")]),
         ]});
-        let stat = transform(&mut body, &mut s, &c);
+        let stat = transform(&mut body, &c);
         assert_eq!(stat.blocks_stubbed, 0);
     }
 
     #[test]
     fn thinking_tool_use_and_media_are_never_touched() {
-        let (c, mut s) = (cfg(), Session::default());
+        let c = cfg();
         let img = json!({"type": "image", "source": {"type": "base64", "data": "AAAA"}});
         let mut body = json!({"model": "m", "messages": [
             user_msg(vec![
@@ -274,7 +272,7 @@ mod tests {
             ]}),
             user_msg(vec![big("t1")]),
         ]});
-        let stat = transform(&mut body, &mut s, &c);
+        let stat = transform(&mut body, &c);
         // The mixed-media tool result and the assistant blocks are not
         // candidates at all; the plain copy at the end has no duplicate here.
         assert_eq!(stat.blocks_stubbed, 0);
@@ -297,26 +295,26 @@ mod tests {
 
     #[test]
     fn pre_stubbed_content_is_never_double_stubbbed() {
-        let (mut c, mut s) = (cfg(), Session::default());
+        let mut c = cfg();
         c.min_block_bytes = 10; // force stubs past the size filter
-        let stub = stub_text(0, 12345);
+        let stub = stub_text("test", 12345);
         let mut body = json!({"model": "m", "messages": [
             user_msg(vec![json!({"type": "tool_result", "tool_use_id": "t", "content": stub.clone()})]),
             user_msg(vec![json!({"type": "tool_result", "tool_use_id": "t", "content": stub})]),
         ]});
-        let stat = transform(&mut body, &mut s, &c);
+        let stat = transform(&mut body, &c);
         assert_eq!(stat.blocks_stubbed, 0);
         assert_eq!(stat.est_orig_bytes, 0);
     }
 
     #[test]
     fn small_blocks_below_threshold_never_stubbbed() {
-        let (c, mut s) = (cfg(), Session::default());
+        let c = cfg();
         let mut body = json!({"model": "m", "messages": [
             user_msg(vec![json!({"type": "tool_result", "tool_use_id": "t", "content": "short"})]),
             user_msg(vec![json!({"type": "tool_result", "tool_use_id": "t", "content": "short"})]),
         ]});
-        assert_eq!(transform(&mut body, &mut s, &c).blocks_stubbed, 0);
+        assert_eq!(transform(&mut body, &c).blocks_stubbed, 0);
     }
 
     #[test]

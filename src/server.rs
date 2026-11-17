@@ -6,6 +6,7 @@
 
 use bytes::Bytes;
 use http_body_util::BodyExt;
+use http_body_util::Limited;
 use hyper::body::Incoming;
 use hyper::header::{HeaderValue, CONTENT_LENGTH, CONTENT_TYPE};
 use hyper::http::request::Parts;
@@ -16,27 +17,28 @@ use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
+use tokio::sync::{watch, Semaphore};
+use tokio::task::JoinSet;
 
 use crate::config::Config;
 use crate::paths;
 use crate::shrink::{
     anthropic as sh_anthropic, openai as sh_openai, responses as sh_responses, ShrinkStat,
 };
-use crate::store::{journal, usage_from_json, Record, Sessions, Usage};
+use crate::store::{journal, usage_from_json, Record, Usage};
 use crate::upstream::{
     forward_req_headers, forward_resp_headers, full, hyper_stream, make_client, BoxBody, BoxError,
     TapBody, UpstreamClient,
 };
 
-const MAX_BODY: usize = 256 << 20; // request bodies we transform
+const MAX_BODY: usize = 16 << 20; // request bodies we transform
 const MAX_RESP: usize = 64 << 20; // response bodies we buffer for usage taps
 
 pub struct AppState {
     pub cfg: Config,
     pub clt: UpstreamClient,
-    pub sessions: Sessions,
     pub state_dir: PathBuf,
 }
 
@@ -49,7 +51,6 @@ pub async fn run(cfg: Config, quiet: bool) -> anyhow::Result<()> {
     Config::write_default_example(&cfg_dir);
     let state = Arc::new(AppState {
         clt: make_client(),
-        sessions: Sessions::new(cfg.max_sessions),
         state_dir: paths::state_dir(),
         cfg: cfg.clone(),
     });
@@ -65,24 +66,63 @@ pub async fn run(cfg: Config, quiet: bool) -> anyhow::Result<()> {
 }
 
 pub async fn serve(listener: TcpListener, state: St) -> anyhow::Result<()> {
-    let sig = tokio::signal::ctrl_c();
+    let sig = shutdown_signal();
     tokio::pin!(sig);
+    let slots = Arc::new(Semaphore::new(16));
+    let (stop, _) = watch::channel(false);
+    let mut connections = JoinSet::new();
     loop {
         tokio::select! {
             _ = &mut sig => break,
+            Some(_) = connections.join_next(), if !connections.is_empty() => {},
             accepted = listener.accept() => {
                 let (sock, _) = accepted?;
+                let Ok(permit) = slots.clone().try_acquire_owned() else { continue };
                 let st = state.clone();
-                tokio::spawn(async move {
+                let mut stopped = stop.subscribe();
+                connections.spawn(async move {
+                    let _permit = permit;
                     let svc = service_fn(move |req| handle(req, st.clone()));
-                    let _ = hyper::server::conn::http1::Builder::new()
-                        .serve_connection(TokioIo::new(sock), svc)
-                        .await;
+                    let mut builder = hyper::server::conn::http1::Builder::new();
+                    builder.timer(hyper_util::rt::TokioTimer::new()).header_read_timeout(Duration::from_secs(15));
+                    let connection = builder.serve_connection(TokioIo::new(sock), svc);
+                    tokio::pin!(connection);
+                    tokio::select! {
+                        _ = &mut connection => {},
+                        _ = stopped.changed() => {
+                            connection.as_mut().graceful_shutdown();
+                            let _ = connection.await;
+                        }
+                    }
+
                 });
             }
         }
     }
+    let _ = stop.send(true);
+    let _ = tokio::time::timeout(Duration::from_secs(10), async {
+        while connections.join_next().await.is_some() {}
+    })
+    .await;
+    connections.abort_all();
     Ok(())
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        if let Ok(mut term) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
+        } else {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 async fn handle(
@@ -95,9 +135,45 @@ async fn handle(
         .await;
     match res {
         Ok(Ok(resp)) => Ok(resp),
-        Ok(Err(e)) => Ok(error_json(502, &e.to_string())),
+        Ok(Err(e)) => {
+            let status = e
+                .downcast_ref::<GatewayError>()
+                .map(|e| e.status)
+                .unwrap_or(502);
+            Ok(error_json(status, &e.to_string()))
+        }
         Err(_) => Ok(error_json(500, "internal gateway panic (isolated)")),
     }
+}
+
+#[derive(Debug)]
+struct GatewayError {
+    status: u16,
+    message: &'static str,
+}
+impl std::fmt::Display for GatewayError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message)
+    }
+}
+impl std::error::Error for GatewayError {}
+fn fail(status: u16, message: &'static str) -> BoxError {
+    Box::new(GatewayError { status, message })
+}
+
+async fn read_body(body: Incoming, limit: usize, request: bool) -> Result<Bytes, BoxError> {
+    let collected = tokio::time::timeout(
+        Duration::from_secs(120),
+        Limited::new(body, limit).collect(),
+    )
+    .await
+    .map_err(|_| fail(if request { 408 } else { 504 }, "body read timed out"))?;
+    collected.map(|b| b.to_bytes()).map_err(|_| {
+        fail(
+            if request { 413 } else { 502 },
+            "body exceeded limit or could not be read",
+        )
+    })
 }
 
 fn error_json(status: u16, msg: &str) -> Response<BoxBody> {
@@ -111,6 +187,31 @@ fn error_json(status: u16, msg: &str) -> Response<BoxBody> {
 
 async fn route(req: Request<Incoming>, st: St) -> Result<Response<BoxBody>, BoxError> {
     let (parts, body) = req.into_parts();
+    // Browsers cannot use this credential-forwarding endpoint cross-origin.
+    if parts.headers.contains_key("origin") {
+        return Err(fail(403, "browser-origin requests are not allowed"));
+    }
+    let host = parts
+        .headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if host != format!("127.0.0.1:{}", st.cfg.port) && host != format!("localhost:{}", st.cfg.port)
+    {
+        return Err(fail(403, "Host must match the local gateway address"));
+    }
+    if parts
+        .headers
+        .get("content-encoding")
+        .is_some_and(|v| v != "identity")
+    {
+        return Err(fail(415, "compressed request bodies are not supported"));
+    }
+    if let Some(upstream) = force_upstream(&parts.headers) {
+        if !["anthropic", "openai", "meta", "opencode"].contains(&upstream.as_str()) {
+            return Err(fail(400, "unknown x-shrinkgate-upstream"));
+        }
+    }
     let path = parts.uri.path().to_string();
     let method = parts.method.clone();
     match (&method, path.as_str()) {
@@ -220,7 +321,8 @@ fn finish_with_usage(st: &St, p: &Pending, status: u16, usage: Option<Usage>) {
         ms: p.started.elapsed().as_millis(),
         usage,
     };
-    journal(&st.state_dir, &rec);
+    let dir = st.state_dir.clone();
+    tokio::task::spawn_blocking(move || journal(&dir, &rec));
 }
 
 /// Sends the transformed request upstream and returns the tap/forward response.
@@ -232,11 +334,10 @@ async fn send_transformed(
     pending: Pending,
 ) -> Result<Response<BoxBody>, BoxError> {
     let req = build_upstream_request(&parts, url, Bytes::from(body_bytes), true)?;
-    let started_body = Instant::now();
-    let resp = st.clt.request(req).await.map_err(|e| {
+    let resp = tokio::time::timeout(Duration::from_secs(120), st.clt.request(req)).await
+        .map_err(|_| fail(504, "upstream response timed out"))?.map_err(|e| {
         format!("ShrinkGate could not reach the upstream API: {e}. Your agent's auth headers are forwarded unchanged.")
     })?;
-    let _ = started_body;
     let (up_parts, up_body) = resp.into_parts();
     let status = up_parts.status.as_u16();
     let is_sse = up_parts
@@ -252,8 +353,8 @@ async fn send_transformed(
         let usage_cell = Arc::new(std::sync::Mutex::new(None::<Usage>));
         let st2 = st.clone();
         let p2 = pending.clone();
-        let on_end = Box::new(move |usage: Option<Usage>| {
-            finish_with_usage(&st2, &p2, status, usage);
+        let on_end = Box::new(move |usage: Option<Usage>, complete: bool| {
+            finish_with_usage(&st2, &p2, if complete { status } else { 499 }, usage);
         });
         let body = TapBody::new(hyper_stream(up_body.into_data_stream()), usage_cell, on_end);
         let mut rb = Response::builder().status(status);
@@ -267,10 +368,7 @@ async fn send_transformed(
             .map_err(|e| Box::new(e) as BoxError)
     } else {
         // Buffer (bounded), extract usage, journal, forward bytes.
-        let bytes = up_body.collect().await?.to_bytes();
-        if bytes.len() > MAX_RESP {
-            return Err("upstream response exceeded the ShrinkGate buffer".into());
-        }
+        let bytes = read_body(up_body, MAX_RESP, false).await?;
         let usage = serde_json::from_slice::<Value>(&bytes)
             .ok()
             .and_then(|v| usage_from_json(&v));
@@ -304,21 +402,20 @@ async fn messages(
     st: St,
     route: &'static str,
 ) -> Result<Response<BoxBody>, BoxError> {
-    let bytes = body.collect().await?.to_bytes();
-    if bytes.len() > MAX_BODY {
-        return Err("request body exceeded the ShrinkGate limit".into());
-    }
-    let mut v: Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("request body is not valid JSON: {e}"))?;
+    let bytes = read_body(body, MAX_BODY, true).await?;
+    let mut v: Value =
+        serde_json::from_slice(&bytes).map_err(|_| fail(400, "request body is not valid JSON"))?;
     let session = sh_anthropic::session_key(&v);
     let mut stat = ShrinkStat::default();
     if st.cfg.shrink {
         let cfg = st.cfg.clone();
-        stat = st
-            .sessions
-            .with_session(&session, |sess| sh_anthropic::transform(&mut v, sess, &cfg));
+        stat = sh_anthropic::transform(&mut v, &cfg);
     }
-    let out = serde_json::to_vec(&v)?;
+    let out = if st.cfg.shrink {
+        serde_json::to_vec(&v)?
+    } else {
+        bytes.to_vec()
+    };
     let url = format!(
         "{}{}",
         anthropic_base(&st, &parts).trim_end_matches('/'),
@@ -347,21 +444,20 @@ async fn chat_completions(
     body: Incoming,
     st: St,
 ) -> Result<Response<BoxBody>, BoxError> {
-    let bytes = body.collect().await?.to_bytes();
-    if bytes.len() > MAX_BODY {
-        return Err("request body exceeded the ShrinkGate limit".into());
-    }
-    let mut v: Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("request body is not valid JSON: {e}"))?;
+    let bytes = read_body(body, MAX_BODY, true).await?;
+    let mut v: Value =
+        serde_json::from_slice(&bytes).map_err(|_| fail(400, "request body is not valid JSON"))?;
     let session = sh_openai::session_key(&v);
     let mut stat = ShrinkStat::default();
     if st.cfg.shrink {
         let cfg = st.cfg.clone();
-        stat = st
-            .sessions
-            .with_session(&session, |sess| sh_openai::transform(&mut v, sess, &cfg));
+        stat = sh_openai::transform(&mut v, &cfg);
     }
-    let out = serde_json::to_vec(&v)?;
+    let out = if st.cfg.shrink {
+        serde_json::to_vec(&v)?
+    } else {
+        bytes.to_vec()
+    };
     let url = format!(
         "{}{}",
         openai_base(&st, &parts).trim_end_matches('/'),
@@ -380,6 +476,9 @@ async fn chat_completions(
 /// to the ChatGPT backend with the `/v1` prefix stripped. Everything else goes
 /// to the configured OpenAI-compatible upstream.
 fn responses_upstream(st: &St, parts: &Parts) -> (String, String) {
+    if force_upstream(&parts.headers).is_some() {
+        return (openai_base(st, parts), "explicit".into());
+    }
     let auth = parts
         .headers
         .get(hyper::header::AUTHORIZATION)
@@ -400,21 +499,20 @@ fn responses_upstream(st: &St, parts: &Parts) -> (String, String) {
 }
 
 async fn responses(parts: Parts, body: Incoming, st: St) -> Result<Response<BoxBody>, BoxError> {
-    let bytes = body.collect().await?.to_bytes();
-    if bytes.len() > MAX_BODY {
-        return Err("request body exceeded the ShrinkGate limit".into());
-    }
-    let mut v: Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("request body is not valid JSON: {e}"))?;
+    let bytes = read_body(body, MAX_BODY, true).await?;
+    let mut v: Value =
+        serde_json::from_slice(&bytes).map_err(|_| fail(400, "request body is not valid JSON"))?;
     let session = sh_responses::session_key(&v);
     let mut stat = ShrinkStat::default();
     if st.cfg.shrink {
         let cfg = st.cfg.clone();
-        stat = st
-            .sessions
-            .with_session(&session, |sess| sh_responses::transform(&mut v, sess, &cfg));
+        stat = sh_responses::transform(&mut v, &cfg);
     }
-    let out = serde_json::to_vec(&v)?;
+    let out = if st.cfg.shrink {
+        serde_json::to_vec(&v)?
+    } else {
+        bytes.to_vec()
+    };
     let (base, name) = responses_upstream(&st, &parts);
     let pq = path_and_query(&parts);
     let path = if name == "chatgpt" {
@@ -459,7 +557,8 @@ async fn passthrough(parts: Parts, body: Incoming, st: St) -> Result<Response<Bo
     };
     let url = format!("{}{}", base.trim_end_matches('/'), path);
     let req = build_stream_request(&parts, url, hyper_stream(body.into_data_stream()))?;
-    let resp = st.clt.request(req).await.map_err(|e| {
+    let resp = tokio::time::timeout(Duration::from_secs(120), st.clt.request(req)).await
+        .map_err(|_| fail(504, "upstream response timed out"))?.map_err(|e| {
         format!("ShrinkGate could not reach the upstream API: {e}. Your agent's auth headers are forwarded unchanged.")
     })?;
     let (up_parts, up_body) = resp.into_parts();
@@ -472,4 +571,185 @@ async fn passthrough(parts: Parts, body: Incoming, st: St) -> Result<Response<Bo
     }
     rb.body(hyper_stream(up_body.into_data_stream()))
         .map_err(|e| Box::new(e) as BoxError)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::upstream::make_client;
+
+    async fn gateway() -> (u16, tempfile::TempDir, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            port,
+            ..Config::default()
+        };
+        let state = Arc::new(AppState {
+            cfg,
+            clt: make_client(),
+            state_dir: dir.path().to_path_buf(),
+        });
+        let handle = tokio::spawn(async move {
+            serve(listener, state).await.unwrap();
+        });
+        (port, dir, handle)
+    }
+    #[tokio::test]
+    async fn invalid_json_compression_origin_and_size_return_client_errors() {
+        let (port, _dir, task) = gateway().await;
+        for (header, value, body, expected) in [
+            (
+                "content-type",
+                "application/json",
+                Bytes::from_static(b"{broken"),
+                400,
+            ),
+            ("content-encoding", "gzip", Bytes::from_static(b"{}"), 415),
+            (
+                "origin",
+                "https://evil.test",
+                Bytes::from_static(b"{}"),
+                403,
+            ),
+            ("host", "evil.test", Bytes::from_static(b"{}"), 403),
+            (
+                "content-type",
+                "application/json",
+                Bytes::from(vec![b'x'; MAX_BODY + 1]),
+                413,
+            ),
+        ] {
+            let req = Request::builder()
+                .method("POST")
+                .uri(format!("http://127.0.0.1:{port}/v1/messages"))
+                .header(header, value)
+                .body(full(body))
+                .unwrap();
+            let response = make_client().request(req).await.unwrap();
+            assert_eq!(response.status().as_u16(), expected);
+        }
+        task.abort();
+    }
+    #[test]
+    fn explicit_upstream_overrides_jwt_guessing() {
+        let cfg = Config::default();
+        let st = Arc::new(AppState {
+            cfg: cfg.clone(),
+            clt: make_client(),
+            state_dir: PathBuf::new(),
+        });
+        let (parts, _) = Request::builder()
+            .header("authorization", "Bearer eyJtest")
+            .header("x-shrinkgate-upstream", "meta")
+            .body(())
+            .unwrap()
+            .into_parts();
+        assert_eq!(responses_upstream(&st, &parts).0, cfg.upstream_meta);
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::*;
+    use crate::benchmark::fixture;
+    #[tokio::test]
+    async fn all_protocols_transform_and_stream_identical_response_bytes() {
+        let captures = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let upstream = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let upstream_url = format!("http://127.0.0.1:{}", upstream.local_addr().unwrap().port());
+        let recorded = captures.clone();
+        let mock = tokio::spawn(async move {
+            loop {
+                let (socket, _) = upstream.accept().await.unwrap();
+                let recorded = recorded.clone();
+                tokio::spawn(async move {
+                    let service = service_fn(move |req: Request<Incoming>| {
+                        let recorded = recorded.clone();
+                        async move {
+                            assert_eq!(req.headers()["authorization"], "Bearer fixture-key");
+                            assert!(!req.headers().contains_key("x-shrinkgate-upstream"));
+                            let path = req.uri().path().to_string();
+                            let bytes = req.into_body().collect().await.unwrap().to_bytes();
+                            let v: Value = serde_json::from_slice(&bytes).unwrap();
+                            recorded.lock().unwrap().push((path, v));
+                            let chunks = futures_util::stream::iter([
+                                Ok(Bytes::from_static(b"data: {\"usage\":{\"input_")),
+                                Ok(Bytes::from_static(
+                                    b"tokens\":123,\"output_tokens\":7}}\n\ndata: [DONE]\n\n",
+                                )),
+                            ]);
+                            Ok::<_, std::convert::Infallible>(
+                                Response::builder()
+                                    .header(CONTENT_TYPE, "text/event-stream")
+                                    .body(crate::upstream::boxed_stream(chunks))
+                                    .unwrap(),
+                            )
+                        }
+                    });
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(socket), service)
+                        .await;
+                });
+            }
+        });
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            port,
+            upstream_anthropic: upstream_url.clone(),
+            upstream_openai: upstream_url,
+            ..Config::default()
+        };
+        let state = Arc::new(AppState {
+            cfg,
+            clt: make_client(),
+            state_dir: dir.path().to_path_buf(),
+        });
+        let engine = tokio::spawn(async move {
+            serve(listener, state).await.unwrap();
+        });
+        let text = "file content".repeat(300);
+        for (format, path) in [
+            ("anthropic", "/v1/messages"),
+            ("chat", "/v1/chat/completions"),
+            ("responses", "/v1/responses"),
+        ] {
+            let v = fixture(format, &[text.clone(), text.clone(), text.clone()]);
+            let req = Request::builder()
+                .method("POST")
+                .uri(format!("http://127.0.0.1:{port}{path}"))
+                .header("authorization", "Bearer fixture-key")
+                .header(CONTENT_TYPE, "application/json")
+                .body(full(serde_json::to_vec(&v).unwrap().into()))
+                .unwrap();
+            let response = make_client().request(req).await.unwrap();
+            assert_eq!(response.status(), 200);
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(
+                &bytes[..],
+                b"data: {\"usage\":{\"input_tokens\":123,\"output_tokens\":7}}\n\ndata: [DONE]\n\n"
+            );
+        }
+        let captured = captures.lock().unwrap();
+        assert_eq!(captured.len(), 3);
+        assert!(captured[0].1["messages"][2]["content"][0]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("[shrinkgate]"));
+        assert_eq!(captured[0].1["messages"][6]["content"][0]["content"], text);
+        assert!(captured[1].1["messages"][2]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("[shrinkgate]"));
+        assert!(captured[2].1["input"][2]["output"]
+            .as_str()
+            .unwrap()
+            .starts_with("[shrinkgate]"));
+        drop(captured);
+        engine.abort();
+        mock.abort();
+    }
 }

@@ -1,15 +1,19 @@
-# Build stage: pinned toolchain matching the repo's tested version
-FROM rust:1.96-slim AS build
+FROM rust:1.96-slim-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release
+# Optional corporate build CA; never copied into the runtime image.
+RUN --mount=type=secret,id=cargo_ca \
+    if [ -f /run/secrets/cargo_ca ]; then export CARGO_HTTP_CAINFO=/run/secrets/cargo_ca; fi; \
+    cargo build --release --locked
 
-# Runtime: static binary, no toolchain. The engine binds 127.0.0.1 by design,
-# so run the container with --network host to serve the host's loopback port.
 FROM debian:bookworm-slim
+RUN groupadd --gid 10001 shrinkgate \
+    && useradd --uid 10001 --gid shrinkgate --home-dir /data --create-home shrinkgate
 COPY --from=build /src/target/release/shrinkgate /usr/local/bin/shrinkgate
 ENV HOME=/data
+USER 10001:10001
+VOLUME ["/data"]
 EXPOSE 18793
 ENTRYPOINT ["shrinkgate"]
 CMD ["serve", "--quiet"]

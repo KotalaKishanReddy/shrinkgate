@@ -29,7 +29,7 @@ fn settings_path() -> PathBuf {
 }
 
 fn is_our_url(v: &str, ours: &str) -> bool {
-    v == ours || v.starts_with("http://127.0.0.1:") || v.starts_with("http://localhost:")
+    v == ours
 }
 
 fn refuse(msg: &str) -> anyhow::Error {
@@ -42,25 +42,42 @@ pub async fn connect(
     lean: bool,
     statusline: bool,
     no_service: bool,
+    dry_run: bool,
 ) -> anyhow::Result<()> {
     let ours = cfg.engine_url();
-    let bin = ensure_bin()?;
-    let mut service_used = false;
-    if !no_service {
-        service_used = crate::wire::systemd::install(&bin);
-    }
-    if !ensure_engine(cfg).await? {
+    let bin = crate::paths::bin_install_path();
+    let path = settings_path();
+    let old_state = crate::wire::read_state("claude")?;
+    let mut settings = match crate::wire::read_optional(&path)? {
+        Some(text) => serde_json::from_str::<Value>(&text)
+            .map_err(|_| refuse("settings.json is not valid JSON"))?,
+        None => json!({}),
+    };
+    if !settings.is_object()
+        || settings.get("env").is_some_and(|v| !v.is_object())
+        || settings.get("hooks").is_some_and(|v| !v.is_object())
+        || lookup(&settings, "hooks.SessionStart").is_some_and(|v| !v.is_array())
+    {
         return Err(refuse(
-            "the ShrinkGate engine did not start (systemd user service unavailable and detached spawn failed)",
+            "settings, env and hooks must be objects; SessionStart must be an array",
         ));
     }
-
-    let path = settings_path();
-    let mut settings = match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str::<Value>(&text)
-            .map_err(|_| refuse(&format!("{path:?} is not valid JSON")))?,
-        Err(_) => json!({}),
-    };
+    if old_state
+        .as_ref()
+        .is_some_and(|s| s.pointer("/written/env.ANTHROPIC_BASE_URL").is_some())
+    {
+        let old = old_state.as_ref().unwrap();
+        if old["written"]
+            .as_object()
+            .is_some_and(|w| w.iter().all(|(k, v)| lookup(&settings, k) == Some(v)))
+        {
+            println!("claude: already connected; original backup preserved. Uninstall before changing options.");
+            return Ok(());
+        }
+        return Err(refuse(
+            "saved Claude settings differ; uninstall or resolve the backup before reconnecting",
+        ));
+    }
 
     let base_now = lookup(&settings, BASE_URL_KEY)
         .and_then(Value::as_str)
@@ -87,14 +104,21 @@ pub async fn connect(
     }
 
     // Record previous values for everything we are about to write.
-    let mut written = serde_json::Map::new();
-    let mut previous = serde_json::Map::new();
+    let mut written = old_state
+        .as_ref()
+        .and_then(|s| s["written"].as_object())
+        .cloned()
+        .unwrap_or_default();
+    let mut previous = old_state
+        .as_ref()
+        .and_then(|s| s["previous"].as_object())
+        .cloned()
+        .unwrap_or_default();
     {
         let mut record = |key: &str, value: Value| {
-            previous.insert(
-                key.to_string(),
-                lookup(&settings, key).cloned().unwrap_or(Value::Null),
-            );
+            previous
+                .entry(key.to_string())
+                .or_insert_with(|| lookup(&settings, key).cloned().unwrap_or(Value::Null));
             written.insert(key.to_string(), value);
         };
         record(BASE_URL_KEY, Value::String(ours.clone()));
@@ -107,13 +131,13 @@ pub async fn connect(
         if statusline {
             record(
                 "statusLine",
-                json!({"type": "command", "command": format!("{} statusline", bin.display())}),
+                json!({"type": "command", "command": format!("{} statusline", crate::wire::command_path(&bin))}),
             );
         }
     }
 
     // SessionStart hook.
-    let hook_entry = json!({"hooks": [{"type": "command", "command": format!("{} serve --ensure", bin.display())}]});
+    let hook_entry = json!({"hooks": [{"type": "command", "command": format!("{} serve --ensure", crate::wire::command_path(&bin))}]});
     let hook_existed = lookup(&settings, "hooks").is_some();
     let session_start_existed = lookup(&settings, "hooks.SessionStart").is_some();
     let entry_json = serde_json::to_string(&hook_entry)?;
@@ -147,6 +171,7 @@ pub async fn connect(
     );
 
     // Persist state first, then settings (mirrors the original's ordering).
+    let lean_managed = written.contains_key(LEAN_KEY);
     let state = json!({
         "version": 1,
         "connected_at": now_iso(),
@@ -158,16 +183,22 @@ pub async fn connect(
             "session_start_existed": session_start_existed,
             "entry": hook_entry,
         },
-        "lean": lean,
+        "lean": lean_managed,
         "statusline": statusline,
         "service": !no_service,
         "bin": bin.display().to_string(),
     });
-    write_json_private(&wire_state_file("claude"), &state)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let written = serde_json::to_string_pretty(&settings)? + "\n";
+    if dry_run {
+        crate::wire::preview(&path, &written);
+        return Ok(());
     }
-    std::fs::write(&path, serde_json::to_string_pretty(&settings)? + "\n")?;
+    let bin = ensure_bin()?;
+    let service_used = !no_service && crate::wire::systemd::install(&bin);
+    if !ensure_engine(cfg).await? {
+        return Err(refuse("the ShrinkGate engine did not start"));
+    }
+    crate::wire::persist_connection("claude", &path, &written, &state)?;
 
     println!(
         "Connected. Claude Code now sends its requests through ShrinkGate on this computer ({}).",
@@ -239,11 +270,11 @@ pub fn status(cfg: &Config) -> String {
     lines.join("\n")
 }
 
-pub fn uninstall(_cfg: &Config, purge: bool) -> anyhow::Result<bool> {
+pub fn uninstall(_cfg: &Config) -> anyhow::Result<bool> {
     let state_file = wire_state_file("claude");
-    let Some(state) = read_json_file(&state_file) else {
+    let Some(state) = crate::wire::read_state("claude")? else {
         println!("Not connected by ShrinkGate. Nothing to restore for Claude Code.");
-        return Ok(no_other_wires(None) && purge_clean(purge));
+        return Ok(true);
     };
     let path = settings_path();
     let mut settings = match std::fs::read_to_string(&path)
@@ -253,8 +284,7 @@ pub fn uninstall(_cfg: &Config, purge: bool) -> anyhow::Result<bool> {
         Some(v) => v,
         None => {
             println!("settings.json is unreadable; it was not modified.");
-            let _ = std::fs::remove_file(&state_file);
-            return Ok(true);
+            return Ok(false);
         }
     };
 
@@ -286,7 +316,24 @@ pub fn uninstall(_cfg: &Config, purge: bool) -> anyhow::Result<bool> {
         }
     }
 
-    std::fs::write(&path, serde_json::to_string_pretty(&settings)? + "\n")?;
+    crate::wire::atomic_write(
+        &path,
+        (serde_json::to_string_pretty(&settings)? + "\n").as_bytes(),
+    )?;
+    if !leftovers.is_empty() {
+        let mut remaining = state.clone();
+        remaining["written"]
+            .as_object_mut()
+            .unwrap()
+            .retain(|k, _| leftovers.contains(k));
+        remaining.as_object_mut().unwrap().remove("hook");
+        write_json_private(&state_file, &remaining)?;
+        println!(
+            "Changed settings kept; recovery state retained: {}",
+            leftovers.join(", ")
+        );
+        return Ok(false);
+    }
     let _ = std::fs::remove_file(&state_file);
 
     let mut kept_service = false;
@@ -294,10 +341,6 @@ pub fn uninstall(_cfg: &Config, purge: bool) -> anyhow::Result<bool> {
         crate::wire::systemd::remove();
     } else {
         kept_service = true;
-    }
-
-    if purge {
-        purge_clean(true);
     }
 
     if leftovers.is_empty() {
@@ -313,15 +356,6 @@ pub fn uninstall(_cfg: &Config, purge: bool) -> anyhow::Result<bool> {
         }
         Ok(false)
     }
-}
-
-fn purge_clean(purge: bool) -> bool {
-    if purge {
-        let _ = std::fs::remove_file(crate::paths::bin_install_path());
-        let _ = std::fs::remove_dir_all(crate::paths::state_dir());
-        println!("Purged the ShrinkGate binary and all state.");
-    }
-    true
 }
 
 /// lean on/off/status: only the auto-compact window.
@@ -352,12 +386,12 @@ pub fn lean(action: &str, force: bool) -> anyhow::Result<i32> {
             Ok(0)
         }
         "on" | "off" => {
-            let mut settings = std::fs::read_to_string(&path)
-                .ok()
-                .map(|t| serde_json::from_str::<Value>(&t))
-                .and_then(|r| r.ok())
-                .unwrap_or(json!({}));
-            let mut state = read_json_file(&state_file).unwrap_or(json!({
+            let mut settings: Value = match crate::wire::read_optional(&path)? {
+                Some(text) => serde_json::from_str(&text)?,
+                None => json!({}),
+            };
+            anyhow::ensure!(settings.is_object(), "settings must be a JSON object");
+            let mut state = crate::wire::read_state("claude")?.unwrap_or(json!({
                 "version": 1, "written": {}, "previous": {},
                 "connected_at": now_iso(),
             }));
@@ -399,13 +433,24 @@ pub fn lean(action: &str, force: bool) -> anyhow::Result<i32> {
                     .as_object_mut()
                     .unwrap()
                     .insert("lean".into(), Value::Bool(true));
-                write_json_private(&state_file, &state)?;
-                std::fs::create_dir_all(path.parent().unwrap())?;
-                std::fs::write(&path, serde_json::to_string_pretty(&settings)? + "\n")?;
+                crate::wire::persist_connection(
+                    "claude",
+                    &path,
+                    &(serde_json::to_string_pretty(&settings)? + "\n"),
+                    &state,
+                )?;
                 println!("lean: on (auto-compact window {LEAN_WINDOW} tokens). Start a new Claude Code session.");
             } else {
-                let mut leftovers = restore_written(&mut settings, &state);
-                leftovers.retain(|k| k == LEAN_KEY);
+                let mut only_lean = state.clone();
+                only_lean["written"]
+                    .as_object_mut()
+                    .unwrap()
+                    .retain(|k, _| k == LEAN_KEY);
+                let leftovers = restore_written(&mut settings, &only_lean);
+                anyhow::ensure!(
+                    leftovers.is_empty(),
+                    "lean setting changed externally; backup retained"
+                );
                 state
                     .as_object_mut()
                     .unwrap()
@@ -418,8 +463,12 @@ pub fn lean(action: &str, force: bool) -> anyhow::Result<i32> {
                 {
                     w.remove(LEAN_KEY);
                 }
-                write_json_private(&state_file, &state)?;
-                std::fs::write(&path, serde_json::to_string_pretty(&settings)? + "\n")?;
+                crate::wire::persist_connection(
+                    "claude",
+                    &path,
+                    &(serde_json::to_string_pretty(&settings)? + "\n"),
+                    &state,
+                )?;
                 println!("lean: off. Start a new Claude Code session.");
             }
             Ok(0)

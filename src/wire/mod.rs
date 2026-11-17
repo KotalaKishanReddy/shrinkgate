@@ -24,17 +24,122 @@ pub fn read_json_file(path: &Path) -> Option<Value> {
     serde_json::from_str(&text).ok()
 }
 
-pub fn write_json_private(path: &Path, v: &Value) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, serde_json::to_string_pretty(v)? + "\n")?;
+/// Atomically replace private data, with permissions set before any bytes are written.
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("path has no parent"))?;
+    anyhow::ensure!(
+        !std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()),
+        "refusing to replace symlink {}; manage this file manually",
+        path.display()
+    );
+    std::fs::create_dir_all(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        tmp.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    tmp.write_all(bytes)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path)?;
+    #[cfg(unix)]
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+pub fn write_json_private(path: &Path, v: &Value) -> anyhow::Result<()> {
+    atomic_write(path, (serde_json::to_string_pretty(v)? + "\n").as_bytes())
+}
+
+/// Serialize CLI changes across processes, including recovery state updates.
+pub fn config_lock() -> anyhow::Result<std::fs::File> {
+    let dir = crate::paths::state_dir();
+    std::fs::create_dir_all(&dir)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join("config.lock"))?;
+    fs2::FileExt::try_lock_exclusive(&file)
+        .map_err(|_| anyhow::anyhow!("another ShrinkGate configuration command is running"))?;
+    Ok(file)
+}
+
+pub fn read_optional(path: &Path) -> anyhow::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+pub fn read_state(agent: &str) -> anyhow::Result<Option<Value>> {
+    let Some(text) = read_optional(&wire_state_file(agent))? else {
+        return Ok(None);
+    };
+    let v: Value = serde_json::from_str(&text)?;
+    anyhow::ensure!(
+        v.is_object(),
+        "invalid {agent} recovery state: expected an object"
+    );
+    if agent == "claude" {
+        anyhow::ensure!(
+            v["written"].is_object() && v["previous"].is_object(),
+            "invalid Claude recovery maps; state retained"
+        );
+    } else {
+        anyhow::ensure!(
+            v["written"].is_string() && (v["original"].is_null() || v["original"].is_string()),
+            "invalid {agent} recovery snapshot; state retained"
+        );
+    }
+    Ok(Some(v))
+}
+
+/// Keep the first recovery snapshot; never overwrite it on reconnect.
+pub fn already_connected(agent: &str, path: &Path) -> anyhow::Result<bool> {
+    if let Some(state) = read_state(agent)? {
+        let current = read_optional(path)?;
+        if current.as_deref() == state.get("written").and_then(Value::as_str) {
+            println!("{agent}: already connected; original backup preserved. Uninstall before changing options.");
+            return Ok(true);
+        }
+        anyhow::bail!("{agent}: recovery state exists but settings changed; uninstall or resolve the saved backup before reconnecting");
+    }
+    Ok(false)
+}
+
+pub fn persist_connection(
+    agent: &str,
+    path: &Path,
+    written: &str,
+    state: &Value,
+) -> anyhow::Result<()> {
+    let state_path = wire_state_file(agent);
+    let previous_state = read_optional(&state_path)?;
+    write_json_private(&state_path, state)?;
+    if let Err(error) = atomic_write(path, written.as_bytes()) {
+        match previous_state {
+            Some(s) => atomic_write(&state_path, s.as_bytes())?,
+            None => std::fs::remove_file(&state_path)?,
+        }
+        return Err(error);
     }
     Ok(())
+}
+
+pub fn preview(path: &Path, written: &str) {
+    println!(
+        "Dry run: proposed contents of {}\n{}",
+        path.display(),
+        written
+    );
+    println!("No configuration, service, or binary was changed.");
 }
 
 /// Copies the running binary to `~/.local/bin/shrinkgate` so hooks and the
@@ -43,41 +148,60 @@ pub fn ensure_bin() -> anyhow::Result<PathBuf> {
     let dst = crate::paths::bin_install_path();
     let src = std::env::current_exe()?;
     if src.canonicalize().ok() != dst.canonicalize().ok() {
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)?;
+        let bytes = std::fs::read(&src)?;
+        if std::fs::read(&dst).ok().as_deref() != Some(&bytes) {
+            atomic_write(&dst, &bytes)?;
         }
-        let tmp = dst.with_extension("tmp");
-        std::fs::copy(&src, &tmp)?;
-        #[cfg(windows)]
-        let _ = std::fs::remove_file(&dst);
-        std::fs::rename(&tmp, &dst)?;
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755));
+        std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755))?;
     }
     Ok(dst)
 }
 
+pub fn command_path(path: &Path) -> String {
+    #[cfg(unix)]
+    {
+        format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+    }
+    #[cfg(not(unix))]
+    {
+        format!("\"{}\"", path.display())
+    }
+}
+
 /// GET /healthz on the local engine. Short timeout.
 pub async fn engine_healthy(port: u16) -> bool {
-    let clt = crate::upstream::make_client();
-    let url = format!("http://127.0.0.1:{port}/healthz");
-    let req = hyper::Request::builder()
-        .method(hyper::Method::GET)
-        .uri(url)
-        .body(crate::upstream::full(bytes::Bytes::new()));
-    match req {
-        Ok(req) => {
-            let fut = clt.request(req);
-            match tokio::time::timeout(std::time::Duration::from_millis(700), fut).await {
-                Ok(Ok(resp)) => resp.status().is_success(),
-                _ => false,
-            }
+    let probe = async {
+        use http_body_util::BodyExt;
+        let req = hyper::Request::builder()
+            .uri(format!("http://127.0.0.1:{port}/healthz"))
+            .body(crate::upstream::full(bytes::Bytes::new()))
+            .ok()?;
+        let resp = crate::upstream::make_client().request(req).await.ok()?;
+        if !resp.status().is_success() {
+            return None;
         }
-        Err(_) => false,
-    }
+        let bytes = http_body_util::Limited::new(resp.into_body(), 4096)
+            .collect()
+            .await
+            .ok()?
+            .to_bytes();
+        let v: Value = serde_json::from_slice(&bytes).ok()?;
+        Some(
+            v["engine"] == "shrinkgate"
+                && v["ok"] == true
+                && v["port"] == port
+                && v["version"] == env!("CARGO_PKG_VERSION"),
+        )
+    };
+    tokio::time::timeout(std::time::Duration::from_millis(700), probe)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false)
 }
 
 /// Starts the engine if it is not already answering. Tries the systemd user
@@ -87,7 +211,7 @@ pub async fn ensure_engine(cfg: &Config) -> anyhow::Result<bool> {
         return Ok(true);
     }
     if !systemd::start() {
-        spawn_detached_serve();
+        spawn_detached_serve(cfg);
     }
     for _ in 0..50 {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -99,13 +223,13 @@ pub async fn ensure_engine(cfg: &Config) -> anyhow::Result<bool> {
 }
 
 #[cfg(unix)]
-pub fn spawn_detached_serve() {
+pub fn spawn_detached_serve(cfg: &Config) {
     use std::os::unix::process::CommandExt;
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
     let _ = std::process::Command::new(exe)
-        .args(["serve", "--quiet"])
+        .args(["serve", "--quiet", "--port", &cfg.port.to_string()])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -114,7 +238,7 @@ pub fn spawn_detached_serve() {
 }
 
 #[cfg(windows)]
-pub fn spawn_detached_serve() {
+pub fn spawn_detached_serve(cfg: &Config) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     const DETACHED_PROCESS: u32 = 0x00000008;
@@ -122,7 +246,7 @@ pub fn spawn_detached_serve() {
         return;
     };
     let _ = std::process::Command::new(exe)
-        .args(["serve", "--quiet"])
+        .args(["serve", "--quiet", "--port", &cfg.port.to_string()])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -131,12 +255,12 @@ pub fn spawn_detached_serve() {
 }
 
 #[cfg(not(any(unix, windows)))]
-pub fn spawn_detached_serve() {
+pub fn spawn_detached_serve(cfg: &Config) {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
     let _ = std::process::Command::new(exe)
-        .args(["serve", "--quiet"])
+        .args(["serve", "--quiet", "--port", &cfg.port.to_string()])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -150,7 +274,7 @@ pub async fn ensure_command(cfg: &Config) -> i32 {
         return 0;
     }
     if !systemd::start() {
-        spawn_detached_serve();
+        spawn_detached_serve(cfg);
     }
     for _ in 0..100 {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -249,6 +373,9 @@ pub fn restore_written(settings: &mut Value, state: &Value) -> Vec<String> {
 
 /// True when no agent wiring state files remain (safe to remove the service).
 pub fn no_other_wires(except: Option<&str>) -> bool {
+    if except != Some("muse") && crate::paths::config_dir().join("muse.env").exists() {
+        return false;
+    }
     for agent in ["claude", "codex", "opencode"] {
         if Some(agent) == except {
             continue;

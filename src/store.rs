@@ -2,10 +2,9 @@
 
 use ring::digest::{Context, SHA256};
 use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
-use std::io::Write as _;
+use std::io::{BufRead, BufReader, Write as _};
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn now_ms() -> u64 {
@@ -15,7 +14,7 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Stable content fingerprint (hex, 16 chars). Length-prefixed parts avoid
+/// Stable content fingerprint (hex, 64 chars). Length-prefixed parts avoid
 /// ambiguity between concatenations.
 pub fn fingerprint(parts: &[&[u8]]) -> String {
     let mut h = Context::new(&SHA256);
@@ -26,14 +25,14 @@ pub fn fingerprint(parts: &[&[u8]]) -> String {
         h.update(p);
     }
     let digest = h.finish();
-    hex16(digest.as_ref())
+    hex_digest(digest.as_ref())
 }
 
-/// Lowercase hex of the first 8 bytes (16 chars).
-fn hex16(b: &[u8]) -> String {
+/// Lowercase hex of the full digest (64 chars).
+fn hex_digest(b: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut s = String::with_capacity(16);
-    for byte in b.iter().take(8) {
+    let mut s = String::with_capacity(64);
+    for byte in b {
         s.push(HEX[(byte >> 4) as usize] as char);
         s.push(HEX[(byte & 0xf) as usize] as char);
     }
@@ -43,64 +42,6 @@ fn hex16(b: &[u8]) -> String {
 /// Crude token estimate (≈ chars/4 for code and prose).
 pub fn est_tokens(bytes: usize) -> usize {
     bytes / 4
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Seen {
-    /// Request ordinal within the session when this content was first sent.
-    pub turn: u32,
-}
-
-#[derive(Default)]
-pub struct Session {
-    pub seen: HashMap<String, Seen>,
-    pub turn: u32,
-}
-
-struct Inner {
-    map: HashMap<String, Session>,
-    lru: VecDeque<String>,
-}
-
-pub struct Sessions {
-    inner: Mutex<Inner>,
-    max: usize,
-}
-
-impl Sessions {
-    pub fn new(max: usize) -> Self {
-        Self {
-            inner: Mutex::new(Inner {
-                map: HashMap::new(),
-                lru: VecDeque::new(),
-            }),
-            max: max.max(8),
-        }
-    }
-
-    /// Runs `f` with the session's mutable state, touching LRU order and
-    /// evicting the oldest sessions beyond the cap. `f` must not await.
-    pub fn with_session<R>(&self, key: &str, f: impl FnOnce(&mut Session) -> R) -> R {
-        let mut g: MutexGuard<Inner> = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => PoisonError::into_inner(poisoned),
-        };
-        if let Some(pos) = g.lru.iter().position(|k| k == key) {
-            g.lru.remove(pos);
-        }
-        g.lru.push_back(key.to_string());
-        while g.map.len() > self.max {
-            match g.lru.pop_front() {
-                Some(old) if old != key => {
-                    g.map.remove(&old);
-                }
-                Some(_) => continue,
-                None => break,
-            }
-        }
-        let session = g.map.entry(key.to_string()).or_default();
-        f(session)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -209,45 +150,102 @@ impl Record {
     }
 }
 
+static JOURNAL_LOCK: Mutex<()> = Mutex::new(());
+const JOURNAL_LIMIT: u64 = 8 << 20;
+
 pub fn journal(state_dir: &Path, rec: &Record) {
-    let file = crate::paths::usage_file(state_dir);
-    if let Some(parent) = file.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file)
-    {
-        let _ = writeln!(f, "{}", rec.to_json());
+    let Ok(_lock) = JOURNAL_LOCK.lock() else {
+        return;
+    };
+    let result = (|| -> std::io::Result<()> {
+        std::fs::create_dir_all(state_dir)?;
+        let file = crate::paths::usage_file(state_dir);
+        if std::fs::metadata(&file).is_ok_and(|m| m.len() >= JOURNAL_LIMIT) {
+            let old = state_dir.join("usage.previous.jsonl");
+            if old.exists() {
+                std::fs::remove_file(&old)?;
+            }
+            std::fs::rename(&file, old)?;
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut f = options.open(file)?;
+        writeln!(f, "{}", rec.to_json())
+    })();
+    if let Err(e) = result {
+        eprintln!("shrinkgate: could not write usage metadata: {e}");
     }
 }
 
-/// (today_saved_tokens, today_requests, all_saved_tokens, all_requests) in UTC days.
-pub fn totals(state_dir: &Path) -> (u64, u64, u64, u64) {
-    let file = crate::paths::usage_file(state_dir);
-    let Ok(text) = std::fs::read_to_string(&file) else {
-        return (0, 0, 0, 0);
-    };
+/// Retained-journal totals, streamed from disk. Estimates are only credited to
+/// completed 2xx requests. Failed/cancelled attempts are reported separately.
+pub fn summary(state_dir: &Path) -> Value {
+    let mut requests = 0u64;
+    let mut failed = 0u64;
+    let mut saved = 0u64;
+    let mut today_saved = 0u64;
+    let mut today_requests = 0u64;
+    let mut input = 0u64;
+    let mut output = 0u64;
+    let mut cached = 0u64;
+    let mut cache_write = 0u64;
+    let mut measured = 0u64;
     let day_start = now_ms() / 86_400_000 * 86_400_000;
-    let mut today_s = 0u64;
-    let mut today_n = 0u64;
-    let mut all_s = 0u64;
-    let mut all_n = 0u64;
-    for line in text.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
+    for path in [
+        state_dir.join("usage.previous.jsonl"),
+        crate::paths::usage_file(state_dir),
+    ] {
+        let Ok(file) = std::fs::File::open(path) else {
             continue;
         };
-        let saved = v.get("saved_tokens").and_then(Value::as_u64).unwrap_or(0);
-        let ts = v.get("ts").and_then(Value::as_u64).unwrap_or(0);
-        all_s += saved;
-        all_n += 1;
-        if ts >= day_start {
-            today_s += saved;
-            today_n += 1;
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let num = |key: &str| v.get(key).and_then(Value::as_u64).unwrap_or(0);
+            requests += 1;
+            if !(200..300).contains(&num("status")) {
+                failed += 1;
+                continue;
+            }
+            saved = saved.saturating_add(num("saved_tokens"));
+            if num("ts") >= day_start {
+                today_saved += num("saved_tokens");
+                today_requests += 1;
+            }
+            if let Some(usage) = v.get("usage").filter(|u| u.is_object()) {
+                measured += 1;
+                input += usage["input_tokens"].as_u64().unwrap_or(0);
+                output += usage["output_tokens"].as_u64().unwrap_or(0);
+                cached += usage["cache_read"].as_u64().unwrap_or(0);
+                cache_write += usage["cache_creation"].as_u64().unwrap_or(0);
+            }
         }
     }
-    (today_s, today_n, all_s, all_n)
+    json!({"scope": "retained local journals (up to approximately 16 MiB)",
+        "estimator": "candidate UTF-8 bytes / 4; not billed savings", "day_timezone": "UTC",
+        "requests": requests, "failed_or_cancelled_requests": failed, "successful_requests": requests - failed,
+        "estimated_saved_tokens": saved, "today_estimated_saved_tokens": today_saved,
+        "today_successful_requests": today_requests,
+        "provider_usage": {"requests_with_usage": measured, "input_tokens": input, "output_tokens": output,
+            "cache_read_tokens": cached, "cache_creation_tokens": cache_write}})
+}
+
+/// (today estimated reductions, today successful requests, retained reductions, retained successful requests).
+pub fn totals(state_dir: &Path) -> (u64, u64, u64, u64) {
+    let v = summary(state_dir);
+    let n = |k: &str| v[k].as_u64().unwrap_or(0);
+    (
+        n("today_estimated_saved_tokens"),
+        n("today_successful_requests"),
+        n("estimated_saved_tokens"),
+        n("successful_requests"),
+    )
 }
 
 /// UTC calendar date (y, m, d) from a unix millisecond timestamp.
@@ -277,7 +275,7 @@ mod tests {
         let c = fingerprint(&[b"helloworld"]);
         let d = fingerprint(&[b"hell", b"oworld"]);
         assert_eq!(a, b);
-        assert_eq!(a.len(), 16);
+        assert_eq!(a.len(), 64);
         // Concatenations must not collide ("hello"+"world" != "helloworld").
         assert_ne!(a, c);
         assert_ne!(c, d);
@@ -348,17 +346,20 @@ mod tests {
         assert_eq!(utc_ymd(1_798_761_600_000), (2027, 1, 1)); // 1.8e9 s = 2027-01-15 minus 14 days
         assert_eq!(utc_ymd(1_799_999_999_999), (2027, 1, 15)); // known: 1.8e9 s epoch
     }
-
     #[test]
-    fn session_lru_evicts_oldest() {
-        let s = Sessions::new(2);
-        s.with_session("a", |_| {});
-        s.with_session("b", |_| {});
-        s.with_session("a", |sess| sess.turn += 1); // touch a: b is now oldest
-        s.with_session("c", |_| {}); // evicts b
-        s.with_session("b", |sess| {
-            assert_eq!(sess.turn, 0, "b was evicted; its state must be fresh")
-        });
-        s.with_session("a", |sess| assert_eq!(sess.turn, 1, "a survived"));
+    fn failed_attempts_are_reported_but_not_credited() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = json!({"ts":now_ms(),"status":200,"saved_tokens":12});
+        let failed = json!({"ts":now_ms(),"status":500,"saved_tokens":9999});
+        let cancelled = json!({"ts":now_ms(),"status":499,"saved_tokens":9999});
+        std::fs::write(
+            dir.path().join("usage.jsonl"),
+            format!("{good}\n{failed}\n{cancelled}\n"),
+        )
+        .unwrap();
+        let report = summary(dir.path());
+        assert_eq!(report["requests"], 3);
+        assert_eq!(report["failed_or_cancelled_requests"], 2);
+        assert_eq!(report["estimated_saved_tokens"], 12);
     }
 }
