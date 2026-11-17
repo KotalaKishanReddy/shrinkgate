@@ -6,12 +6,7 @@
 
 A local Rust gateway that removes repeated tool output from coding-agent requests.
 
-[![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-ea6344?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Crates.io](https://img.shields.io/crates/v/shrinkgate?style=flat-square&color=fc8d62&logo=rust)](https://crates.io/crates/shrinkgate)
-[![CI](https://img.shields.io/github/actions/workflow/status/KotalaKishanReddy/shrinkgate/ci.yml?branch=main&style=flat-square&logo=github&label=CI)](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate?style=flat-square&color=58a6ff&logo=github)](https://github.com/KotalaKishanReddy/shrinkgate/releases)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](https://github.com/KotalaKishanReddy/shrinkgate)
-[![License](https://img.shields.io/badge/license-Apache--2.0-2ea44f?style=flat-square)](LICENSE)
+[![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-ea6344?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org) [![Crates.io](https://img.shields.io/crates/v/shrinkgate?style=flat-square&color=fc8d62&logo=rust)](https://crates.io/crates/shrinkgate) [![CI](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate?style=flat-square&color=58a6ff&logo=github)](https://github.com/KotalaKishanReddy/shrinkgate/releases) [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](https://github.com/KotalaKishanReddy/shrinkgate) [![License](https://img.shields.io/badge/license-Apache--2.0-2ea44f?style=flat-square)](LICENSE)
 
 [Get started](#get-started) · [See the demo](#see-it-work) · [Test results](#tested-not-assumed) · [Contribute](CONTRIBUTING.md)
 
