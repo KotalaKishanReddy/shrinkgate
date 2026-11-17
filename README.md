@@ -6,7 +6,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/shrinkgate?style=flat-square&color=blue&logo=rust)](https://crates.io/crates/shrinkgate)
 [![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate?style=flat-square&color=blue&logo=github)](https://github.com/KotalaKishanReddy/shrinkgate/releases)
-[![Tests](https://img.shields.io/badge/tests-22%20passed-success?style=flat-square&logo=rust)](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/KotalaKishanReddy/shrinkgate/ci.yml?branch=main&style=flat-square&logo=github&label=ci)](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml)
 [![Container](https://img.shields.io/badge/ghcr.io-docker-2496ED?style=flat-square&logo=docker)](https://github.com/KotalaKishanReddy/shrinkgate/pkgs/container/shrinkgate)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square&logo=linux)](https://github.com/KotalaKishanReddy/shrinkgate)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg?style=flat-square)](LICENSE)
@@ -37,7 +37,7 @@ shrinkgate status
 ```
 
 <details>
-<summary><b>Other install options (prebuilt binaries / docker)</b></summary>
+<summary><b>Other install options (prebuilt binaries with checksum verification / docker)</b></summary>
 
 - **Prebuilt Binaries (Linux, macOS & Windows)** from [Releases](https://github.com/KotalaKishanReddy/shrinkgate/releases):
   ```sh
@@ -53,6 +53,13 @@ shrinkgate status
   # Windows x86_64 (PowerShell)
   Invoke-WebRequest -Uri https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.1-x86_64-windows.zip -OutFile shrinkgate.zip; Expand-Archive shrinkgate.zip -DestinationPath $env:USERPROFILE\.local\bin
   ```
+
+  *Verify SHA-256 Checksum:*
+  ```sh
+  curl -sSLO https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/sha256sums.txt
+  sha256sum --ignore-missing -c sha256sums.txt
+  ```
+
 - **Docker**:
   ```sh
   docker run -d --network host -v ~/.local/state/shrinkgate:/data ghcr.io/kotalakishanreddy/shrinkgate:latest
@@ -61,12 +68,12 @@ shrinkgate status
 
 ---
 
-## 💡 How It Works & Test Results
+## 💡 How It Works & Savings Breakdown
 
-Coding agents re-send the entire conversation history on every turn. ShrinkGate intercepts outbound requests, SHA-256 fingerprints candidate payloads (tool results, file reads), and replaces re-sent duplicates with deterministic stubs while keeping the newest copy verbatim.
+Coding agents re-send the entire conversation history on every turn. ShrinkGate intercepts outbound requests, computes length-prefixed SHA-256 fingerprints for candidate text payloads (tool results, file contents, compiler diagnostics), and replaces re-sent duplicates with deterministic stubs while keeping the newest copy verbatim.
 
-- **Automated Test Suite**: **22 passed; 0 failed** across Linux, macOS, and Windows (`cargo test --release`).
-- **40–70% token savings** across multi-turn sessions with prompt cache preservation.
+- **Automated CI Validation**: Verified across Ubuntu, macOS, and Windows runners.
+- **Per-Request Panic Isolation**: Powered by Tokio & Hyper with unwinding boundaries; single malformed payloads return an isolated 500 without crashing the background daemon.
 - **Zero data egress**: Strictly binds to `127.0.0.1`, auth headers forwarded untouched over TLS.
 - **Untouched guarantees**: System prompts, tool schemas, thinking traces, and media are never modified.
 
@@ -76,8 +83,18 @@ $ shrinkgate demo
 turn 1: read payments.rs (fresh read)            1722 in    1722 sent        0 saved
 turn 2: same history resent + follow-up          3444 in    1780 sent    +1663 saved
 turn 3: history resent again, file edited once   5184 in    3520 sent    +1663 saved
-Total savings: −3,326 tokens (~40% context trimmed, prompt-cache friendly)
+Total savings: −3,326 tokens (32.1% net reduction on 3-turn fixture; 40–70% on extended sessions)
 ```
+
+### 🧠 Prompt Cache & Cost Dynamics
+
+| Metric / Feature | Built-in Agent Compaction (`/compact`) | ShrinkGate Gateway |
+| :--- | :--- | :--- |
+| **Execution Cadence** | Reactive (only triggers when buffer hits ~75–90% capacity) | Proactive on **every single turn** |
+| **Content Fidelity** | Lossy LLM summarization (can lose exact line numbers & diffs) | Exact loss-free retention of newest copies + deterministic stubs |
+| **Cache Stability** | Re-summarizes all previous context, resetting prompt cache prefix | Deterministic SHA-256 stubs (`[shrinkgate: duplicate omitted; hash: ...]`) keep the prefix stable across turns |
+| **Tail Protection** | Prunes arbitrary historical turns | `keep_last_messages = 2` window always preserves the active working turns |
+| **API Cost Impact** | Avoids hard context truncation | Cuts both **cache write ($3.75/MTok)** and **cache read ($0.30/MTok)** charges by stripping redundant historical bloat |
 
 ---
 
@@ -118,18 +135,6 @@ min_block_bytes = 600        # Minimum content size to qualify for stubbing
 keep_last_messages = 2       # Number of newest messages to always keep verbatim
 max_sessions = 1024          # In-memory session tracking capacity
 ```
-
-<details>
-<summary><b>🚀 Release & Publishing Commands</b></summary>
-
-```sh
-# Push a new GitHub release (builds Linux, macOS aarch64/x86_64, & Docker)
-git tag -a v0.1.1 -m "Release v0.1.1" && git push origin v0.1.1
-
-# Publish to Crates.io
-cargo publish
-```
-</details>
 
 ---
 

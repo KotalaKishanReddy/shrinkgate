@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.2] - 2026-11-17
+
+### Added
+- **Per-Request Panic Isolation**: Replaced release `panic = "abort"` with standard unwinding and wrapped HTTP request handlers in `std::panic::AssertUnwindSafe(..).catch_unwind()`, returning an isolated 500 error if malformed requests occur while keeping the daemon alive.
+- **Automated Checksum Verification**: Added `sha256sums.txt` generation and upload to GitHub Releases for all binary archives.
+- **Prompt Cache Documentation**: Comprehensive breakdown of prefix caching dynamics, deterministic SHA-256 stub stability, and comparison with reactive `/compact`.
+
+### Fixed
+- Replaced static test badge in README with live GitHub Actions CI status badge.
+- Corrected net reduction percentage calculations on 3-turn test fixture.
+- Moved maintainer release instructions from user-facing README into `CONTRIBUTING.md`.
+- Updated repository description to reflect cross-platform positioning.
+
 ## [0.1.1] - 2026-11-17
 
 ### Added

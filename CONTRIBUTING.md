@@ -85,3 +85,25 @@ shrinkgate/
 - If introducing or modifying a shrink pass or protocol adapter, include corresponding unit tests in `src/shrink/`.
 - Ensure no sensitive credentials, personal paths, or PII are added to git history.
 - Pull requests are automatically verified by GitHub Actions CI against formatting, clippy, unit tests, and integration demos.
+
+---
+
+## Maintainer Release Process
+
+To publish a new release across GitHub, Crates.io, and GHCR:
+
+1. **Verify All Checks**:
+   ```sh
+   cargo fmt --check && cargo clippy -- -D warnings && cargo test --release
+   ```
+2. **Bump Version**: Update `version = "x.y.z"` in `Cargo.toml` and log changes in `CHANGELOG.md`.
+3. **Commit, Tag & Push**:
+   ```sh
+   git commit -am "chore: release vx.y.z"
+   git tag -a vx.y.z -m "Release vx.y.z"
+   git push origin main --tags
+   ```
+4. **Publish to Crates.io**:
+   ```sh
+   cargo publish
+   ```

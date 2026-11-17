@@ -89,9 +89,15 @@ async fn handle(
     req: Request<Incoming>,
     st: St,
 ) -> Result<Response<BoxBody>, std::convert::Infallible> {
-    Ok(route(req, st)
-        .await
-        .unwrap_or_else(|e| error_json(502, &e.to_string())))
+    use futures_util::FutureExt;
+    let res = std::panic::AssertUnwindSafe(route(req, st))
+        .catch_unwind()
+        .await;
+    match res {
+        Ok(Ok(resp)) => Ok(resp),
+        Ok(Err(e)) => Ok(error_json(502, &e.to_string())),
+        Err(_) => Ok(error_json(500, "internal gateway panic (isolated)")),
+    }
 }
 
 fn error_json(status: u16, msg: &str) -> Response<BoxBody> {
