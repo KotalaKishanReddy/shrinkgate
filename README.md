@@ -5,7 +5,9 @@
 ### *High-performance, local context-shrinking gateway for coding agents.*
 
 [![CI Status](https://img.shields.io/github/actions/workflow/status/KotalaKishanReddy/shrinkgate/ci.yml?branch=main&label=CI&style=flat-square&logo=github)](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate?style=flat-square&color=blue&logo=rust)](https://github.com/KotalaKishanReddy/shrinkgate/releases)
+[![Crates.io Version](https://img.shields.io/crates/v/shrinkgate?style=flat-square&color=blue&logo=rust)](https://crates.io/crates/shrinkgate)
+[![Crates.io Downloads](https://img.shields.io/crates/d/shrinkgate?style=flat-square&color=orange)](https://crates.io/crates/shrinkgate)
+[![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate?style=flat-square&color=blue&logo=github)](https://github.com/KotalaKishanReddy/shrinkgate/releases)
 [![Container Image](https://img.shields.io/badge/ghcr.io-docker_image-2496ED?style=flat-square&logo=docker)](https://github.com/KotalaKishanReddy/shrinkgate/pkgs/container/shrinkgate)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey?style=flat-square&logo=linux)](https://github.com/KotalaKishanReddy/shrinkgate)
@@ -92,32 +94,32 @@ Journal: /tmp/shrinkgate-demo/usage.jsonl
 
 Choose your preferred installation method:
 
-#### Option A: Prebuilt Binary (Recommended)
+#### Option A: Cargo (Crates.io)
+If you have Rust installed, install the latest release directly:
+```sh
+cargo install shrinkgate
+```
 
-**Linux (x86_64):**
+#### Option B: Prebuilt Binaries (Linux & macOS)
+
+Download and install the self-contained ~2.3 MB binary from [GitHub Releases](https://github.com/KotalaKishanReddy/shrinkgate/releases/latest):
+
+**🐧 Linux (x86_64):**
 ```sh
 curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.0-x86_64-linux.tar.gz | tar -xz
 sudo mv shrinkgate /usr/local/bin/
 ```
 
-**macOS (Apple Silicon M1/M2/M3/M4):**
+**🍏 macOS (Apple Silicon M1/M2/M3/M4):**
 ```sh
 curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.0-aarch64-macos.tar.gz | tar -xz
 sudo mv shrinkgate /usr/local/bin/
 ```
 
-**macOS (Intel x86_64):**
+**🍏 macOS (Intel x86_64):**
 ```sh
 curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.0-x86_64-macos.tar.gz | tar -xz
 sudo mv shrinkgate /usr/local/bin/
-```
-
-#### Option B: Cargo Install
-```sh
-cargo install shrinkgate
-# or build from source:
-git clone https://github.com/KotalaKishanReddy/shrinkgate.git && cd shrinkgate
-cargo build --release && cp target/release/shrinkgate ~/.local/bin/
 ```
 
 #### Option C: Docker Container
@@ -125,6 +127,14 @@ cargo build --release && cp target/release/shrinkgate ~/.local/bin/
 docker run -d --name shrinkgate --network host --restart always \
   -v ~/.local/state/shrinkgate:/data \
   ghcr.io/kotalakishanreddy/shrinkgate:latest
+```
+
+#### Option D: Build from Source (Rust 1.85+)
+```sh
+git clone https://github.com/KotalaKishanReddy/shrinkgate.git
+cd shrinkgate
+cargo build --release
+sudo mv target/release/shrinkgate /usr/local/bin/
 ```
 
 ---
@@ -300,6 +310,56 @@ Local runtime data is stored in `~/.local/state/shrinkgate/`:
 2. **Untouched Credentials**: Headers containing `Authorization` or `x-api-key` are never logged, stored, or modified.
 3. **Stream Passthrough**: Responses from model APIs (both Server-Sent Events and buffered JSON) stream directly back to the agent without buffering delays.
 4. **Non-Destructive Uninstall**: Running `shrinkgate uninstall <agent>` checks whether settings were modified since connection, restoring your original files safely.
+
+---
+
+## 🚀 Rust Release & Publishing Commands
+
+ShrinkGate maintains automated release pipelines for both **Crates.io** and **GitHub Releases** (with multi-platform prebuilt binaries):
+
+### 1. Tagging a New GitHub Release
+Pushing a version tag (`v*`) automatically triggers the cross-compilation matrix on GitHub Actions:
+
+```sh
+# 1. Update version in Cargo.toml (e.g. 0.1.1)
+# 2. Commit the version bump
+git commit -am "chore: bump version to 0.1.1"
+
+# 3. Create and push the release tag
+git tag -a v0.1.1 -m "Release v0.1.1"
+git push origin v0.1.1
+```
+
+**Automated CI/CD Actions:**
+- Compiles stripped, LTO-optimized binaries for Linux x86_64, macOS Apple Silicon (`aarch64`), and macOS Intel (`x86_64`).
+- Creates the [GitHub Release](https://github.com/KotalaKishanReddy/shrinkgate/releases) with checksums and downloadable `.tar.gz` archives.
+- Builds and publishes the multi-arch container image to `ghcr.io/kotalakishanreddy/shrinkgate`.
+
+### 2. Publishing to Crates.io
+To push a new version to the public [crates.io/crates/shrinkgate](https://crates.io/crates/shrinkgate) registry:
+
+```sh
+# Verify package contents and compile test
+cargo package --list
+cargo publish --dry-run
+
+# Publish to crates.io
+cargo publish
+```
+
+### 3. Local Multi-Platform Build Commands
+If you need to build release binaries locally for different targets:
+
+```sh
+# Linux 64-bit release
+cargo build --release --target x86_64-unknown-linux-gnu
+
+# macOS Apple Silicon (M1/M2/M3/M4)
+cargo build --release --target aarch64-apple-darwin
+
+# macOS Intel
+cargo build --release --target x86_64-apple-darwin
+```
 
 ---
 
