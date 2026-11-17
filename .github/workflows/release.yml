@@ -36,7 +36,7 @@ jobs:
           cp target/${{ matrix.target }}/release/shrinkgate README.md LICENSE dist/
           tar -czf "shrinkgate-${GITHUB_REF_NAME}-${{ matrix.archive_name }}.tar.gz" -C dist .
       - name: Upload asset artifact
-        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
         with:
           name: binary-${{ matrix.archive_name }}
           path: shrinkgate-*.tar.gz
