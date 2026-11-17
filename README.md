@@ -2,143 +2,152 @@
 
 # ShrinkGate
 
-**Stop sending identical tool output twice.**
+**A little less context. A little more breathing room.**
 
-A local Rust gateway that removes duplicate tool results from coding-agent requests before forwarding them to your model provider.
+A local Rust gateway that removes repeated tool output from coding-agent requests.
 
-[![Crates.io](https://img.shields.io/crates/v/shrinkgate)](https://crates.io/crates/shrinkgate)
-[![CI](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml/badge.svg)](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate)](https://github.com/KotalaKishanReddy/shrinkgate/releases)
-[![License](https://img.shields.io/github/license/KotalaKishanReddy/shrinkgate)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/KotalaKishanReddy/shrinkgate/ci.yml?branch=main&style=flat-square&label=build)](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate?style=flat-square&color=75bcff)](https://github.com/KotalaKishanReddy/shrinkgate/releases)
+[![Crates.io](https://img.shields.io/crates/v/shrinkgate?style=flat-square&color=93e5c2)](https://crates.io/crates/shrinkgate)
+[![License](https://img.shields.io/github/license/KotalaKishanReddy/shrinkgate?style=flat-square&color=93e5c2)](LICENSE)
 
-Claude Code / Codex / OpenCode → **127.0.0.1:18793** → Your provider
+[Get started](#get-started) · [See the demo](#see-it-work) · [Test results](#tested-not-assumed) · [Contribute](CONTRIBUTING.md)
+
+<img src="docs/banner.svg" alt="Less repetition. More room to build. Earlier duplicate outputs become hash stubs; the latest identical copy stays verbatim." width="100%">
 
 </div>
 
-![Local demo: fresh read, repeated read, changed file](docs/demo.svg)
+Read a file twice. Re-run the same compiler command. When identical output appears multiple times **inside one request**, ShrinkGate trims the earlier copies and keeps the latest identical copy intact.
 
-[Replay the recorded terminal demo](docs/demo.cast) with `asciinema play docs/demo.cast` (paced for readability).
+| Small footprint | Conservative defaults | Yours to inspect |
+| :--- | :--- | :--- |
+| Stateless deduplication in a local Rust process. | Tool outputs only; instructions, reasoning and media stay protected. | No telemetry. Preview changes, inspect statistics, and undo the connection. |
 
-## Try it
+## Get started
 
-```sh
-cargo install shrinkgate --locked
-shrinkgate demo                    # Synthetic local fixture; no API keys
-shrinkgate connect claude --dry-run # Inspect the proposed configuration
-shrinkgate connect claude           # Or: codex / opencode
-shrinkgate doctor
-shrinkgate stats --json
-```
-
-**The changes on `main` under “Unreleased” are not yet on crates.io or in v0.1.2 binaries.** To try this revision now:
+> [!IMPORTANT]
+> The hardening and new commands on `main` are **unreleased**. Build from source to use the workflow below. Published crates, binaries and containers still track their release tags.
 
 ```sh
 git clone https://github.com/KotalaKishanReddy/shrinkgate.git
 cd shrinkgate
 cargo install --path . --locked
+
+shrinkgate demo                     # Local fixture; no API keys
+shrinkgate connect claude --dry-run  # Inspect the proposed settings
+shrinkgate connect claude            # Or: codex / opencode
+shrinkgate doctor
 ```
 
-Start a new agent session after connecting. API keys stay in your agent or environment. ShrinkGate forwards authentication to the configured upstream; it does not provide model access.
+Start a new agent session after connecting. Keep using your agent's own authentication. To undo the change: `shrinkgate uninstall claude`.
 
-### Install a verified release binary
+<details>
+<summary><strong>Install a published release instead</strong> — Cargo, verified binaries, Windows</summary>
 
-No Rust toolchain or root access required. Download the installer, inspect it, then run it:
+Released commands may differ from the current source documentation. Read the matching [release notes](https://github.com/KotalaKishanReddy/shrinkgate/releases).
+
+```sh
+cargo install shrinkgate --locked
+```
+
+For a prebuilt binary without Rust or root access, download and inspect the installer, then run it:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSLo install-shrinkgate.sh \
   https://raw.githubusercontent.com/KotalaKishanReddy/shrinkgate/main/scripts/install.sh
 sh install-shrinkgate.sh
-# Optional: SHRINKGATE_VERSION=v0.1.2 SHRINKGATE_INSTALL_DIR="$HOME/.local/bin" sh install-shrinkgate.sh
+# Optional: SHRINKGATE_VERSION=v0.1.2 sh install-shrinkgate.sh
 ```
 
 Windows x64 (PowerShell):
 
 ```powershell
 Invoke-WebRequest https://raw.githubusercontent.com/KotalaKishanReddy/shrinkgate/main/scripts/install.ps1 -OutFile install-shrinkgate.ps1
-# Inspect install-shrinkgate.ps1, then:
+# Inspect the script, then:
 ./install-shrinkgate.ps1
 ```
 
-Installers download the matching release archive and verify its SHA-256 checksum **before extraction**. Checksums detect corrupt downloads; they are not an independent publisher signature. [Manual downloads](https://github.com/KotalaKishanReddy/shrinkgate/releases).
+Installers verify the matching archive's SHA-256 checksum **before extraction**. Checksums detect corrupt downloads; they are not independent publisher signatures. [Manual downloads](https://github.com/KotalaKishanReddy/shrinkgate/releases).
 
-## What it actually saves
+</details>
 
-If a request contains the same sufficiently large tool result multiple times, ShrinkGate replaces earlier copies outside the protected tail with a short content-hash stub. The last identical copy remains verbatim. A file with changed content has a different hash and stays distinct.
+## See it work
 
-**Replaying history alone does not produce savings.** A payload present once in each request stays intact; duplicates must exist within the current request. The transformer retains no cross-request content cache, eliminating persistent fingerprint growth and the old global session lock.
+![Recorded three-turn local demo: fresh output, repeated output, changed file](docs/demo.svg)
 
-- Tool results are eligible by default. User instructions, assistant prose, system/developer prompts, reasoning, schemas, and media are protected by default.
-- Exact duplicate text is retained, but removing historical copies can affect interpretation and ordering. This is not a guarantee of unchanged model behavior.
-- Moving the retained copy can change the historical prefix and invalidate provider prompt caches. Lower request size does **not** guarantee lower billed cost or latency.
-- Local token-reduction counters use candidate UTF-8 bytes ÷ 4. Provider usage is shown separately. No universal percentage or dollar savings is claimed.
+[Replay the recording](docs/demo.cast) with `asciinema play docs/demo.cast`. Playback is paced for readability; the fixture runs locally without provider credentials.
 
-Run the [benchmark suite](docs/BENCHMARKS.md) to see repeated, unique, changed-file, and short-output cases across all three API formats. [Recorded local results](docs/benchmark.json) measure bytes and processing time, not real API billing or task quality.
-
-## Agent compatibility
-
-| Integration | Configuration | Validation / limits |
-| --- | --- | --- |
-| Claude Code | `connect claude [--lean] [--statusline]` | Anthropic Messages fixtures and config restore tested; current live agent versions need manual validation |
-| Codex | `connect codex [--env-key OPENAI_API_KEY]` | Responses fixtures tested; ChatGPT login routing supported but live authentication not verified by CI; profiles refused |
-| OpenCode | `connect opencode` | Adds providers without changing your model; explicit Meta/Zen routing; choose a `shrinkgate/` model |
-| Muse | `connect muse` | Experimental helper only; requires `default_upstream = "meta"`; no live compatibility claim |
-| Other clients | `env` | HTTP Messages, Chat Completions, or Responses; no WebSocket support |
-
-Linux, macOS, and Windows CI runs build/tests. No specific agent version is certified by this test suite. See the [compatibility and release checklist](docs/COMPATIBILITY.md).
-
-## Commands
-
-| Command | Purpose |
-| --- | --- |
-| `serve [--port N] [--no-shrink]` | Foreground gateway; `--no-shrink` preserves request body bytes for comparison |
-| `connect <agent> [--dry-run] [--no-service]` | Preview or connect; persistent recovery snapshot; reconnect preserves the original backup |
-| `uninstall <agent>` | Restore settings if they still match; externally changed values and their recovery data are retained |
-| `doctor` | Check local engine identity/version, config and wiring; no provider credentials sent |
-| `status [agent]` / `stats [--json]` | Wiring status, estimated successful-request reductions, provider usage, failed attempts |
-| `demo` | Asserted three-turn loopback proxy demo |
-| `benchmark [--input request.json] [--iterations 100]` | Local transform/serialization benchmark; no network calls |
-| `lean on\|off\|status` | Optional Claude compaction setting; independent of other managed settings |
-| `env` / `config` / `statusline` | Manual routing, resolved configuration, or terminal summary |
-
-`--dry-run` displays your resulting agent configuration: avoid sharing its output if your original settings contain secrets. Uninstall before changing connection options or the gateway port. `uninstall <agent> --purge` refuses to delete shared state while other integrations or a listening engine remain; stop detached engines first. ShrinkGate refuses to silently overwrite changed recovery state.
-
-## Configuration
-
-`~/.config/shrinkgate/config.toml` (honors `XDG_CONFIG_HOME`):
-
-```toml
-port = 18793
-shrink = true
-min_block_bytes = 600
-keep_last_messages = 2
-allow_user_text = false       # Opt-in; repeated instructions may be intentional
-allow_assistant_text = false
-# upstream_openai = "https://api.openai.com"  # Do not include /v1
-# default_upstream = "openai"
+```text
+Coding agent ──► ShrinkGate · 127.0.0.1:18793 ──► Your model provider
+                       earlier duplicates → hash stubs
+                       latest identical copy → unchanged
 ```
 
-Restart the daemon after changes. Invalid/unknown options fail explicitly. The old `max_sessions` key is accepted but ignored because transforms are stateless. Responses API tail protection counts input items, including tool-call items.
+**History replay alone creates no savings.** If a payload appears only once in the current request, it stays intact. The shrink pass does not remove a sole copy because it was sent on a previous turn.
 
-Operational defaults: 16 concurrent HTTP connections, 16 MiB transformed request limit, 64 MiB buffered non-streaming response limit, 10-second upstream connect timeout, 120-second request-body/upstream-header/non-streaming-response timeout, and 15-second incoming header timeout. Responses stream incrementally; an open SSE stream has no fixed lifetime limit. Shutdown drains connections for up to 10 seconds. These limits are compiled defaults.
-
-## Privacy and operations
-
-No telemetry. Traffic is forwarded to your configured providers over HTTPS; HTTP is allowed only for loopback upstreams. Other local processes under your account can reach the daemon. Browser-origin requests and non-loopback Host headers are rejected. The daemon is intended for a trusted, single-user workstation, not an exposed or multi-tenant service.
-
-Local journals contain timestamps, route, a pseudonymous session fingerprint, status, latency and usage metadata—not prompts or auth headers. Two rotated journals retain approximately 16 MiB; statistics describe retained history, with UTC day boundaries. Failed/cancelled requests do not earn savings credit. Agent recovery snapshots may include secrets already present in original settings and are written privately on Unix; Windows relies on your profile directory ACLs. See [SECURITY.md](SECURITY.md).
-
-### Docker (Linux host networking)
+## Measure your workload
 
 ```sh
-docker run --rm --network host \
-  -v shrinkgate-state:/data \
-  ghcr.io/kotalakishanreddy/shrinkgate:latest
+shrinkgate benchmark --iterations 500
+shrinkgate benchmark --input private-request.json
+shrinkgate stats --json
 ```
 
-The published image tracks tagged releases. Use a dedicated volume: the runtime runs as an unprivileged user. Docker Desktop requires supported/enabled host networking; prefer native binaries otherwise. Do not expose the loopback gateway publicly.
+The built-in fixtures include repeated output, unique output, changed files and short messages. Local counters estimate tokens as candidate UTF-8 bytes ÷ 4; provider usage is reported separately.
 
-## Contribute
+**Smaller requests do not automatically mean a smaller bill.** Rewriting can invalidate provider prompt caches, change model interpretation, or affect latency. No universal savings percentage or unchanged-behavior guarantee is claimed.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [roadmap](docs/ROADMAP.md), [audit and validation](docs/AUDIT.md), and [changelog](CHANGELOG.md). If ShrinkGate helps your workflow, a star and an anonymized benchmark report help others evaluate it.
+[Benchmark results](docs/benchmark.json) · [How to measure real savings](docs/BENCHMARKS.md) · [Validation report](docs/VALIDATION.md)
 
-Apache-2.0. Not affiliated with Anthropic, OpenAI, Meta, or Context Shrink LLC.
+## Tested, not assumed
+
+| Check | Evidence and boundary |
+| :--- | :--- |
+| Linux · macOS · Windows | [CI](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml): build, lint, protocol and recovery tests |
+| Installed Codex client | `0.167.0-alpha.4`: local Responses fixture, streaming, dummy-auth forwarding, 401 failure and config restoration verified |
+| Extended gateway run | A bounded Linux soak covers three API formats, long request histories, errors, cancellation and restart; [recorded results](docs/VALIDATION.md) |
+| Live ChatGPT authentication | Blocked: the available sign-in returns HTTP 401 even without ShrinkGate |
+| Real billed savings | Blocked: no metered provider credentials; local byte estimates are not a substitute |
+
+A client passing a local fixture does not certify its live provider or every agent feature. [Exact coverage and release gates →](docs/COMPATIBILITY.md)
+
+## Bring your agent
+
+| Agent | Connect | Notes |
+| :--- | :--- | :--- |
+| **Claude Code** | `shrinkgate connect claude` | Messages API; optional `--lean` and `--statusline`; live authentication unverified |
+| **Codex** | `shrinkgate connect codex` | Responses API; `--env-key OPENAI_API_KEY` for API-key mode; live sign-in currently blocked |
+| **OpenCode** | `shrinkgate connect opencode` | Adds providers; select a `shrinkgate/` model; explicit Meta/Zen routing |
+| **Other HTTP clients** | `shrinkgate env` | Messages, Chat Completions and Responses; HTTP/SSE, no WebSockets |
+
+Muse is an experimental helper, not a verified integration. It requires `default_upstream = "meta"`. See [compatibility notes](docs/COMPATIBILITY.md).
+
+<details>
+<summary><strong>CLI reference</strong></summary>
+
+| Command | Purpose |
+| :--- | :--- |
+| `serve [--port N] [--no-shrink]` | Foreground gateway; bypass mode preserves request body bytes |
+| `connect <agent> [--dry-run] [--no-service]` | Preview or connect, with a saved recovery snapshot |
+| `uninstall <agent>` | Restore managed settings while preserving external edits |
+| `doctor` | Check local identity, version, configuration and wiring |
+| `status [agent]` / `stats [--json]` | Wiring, estimated reductions, provider usage and failed attempts |
+| `demo` / `benchmark` | Offline proxy demo and transformation measurements |
+| `lean on\|off\|status` | Optional Claude compaction setting |
+| `env` / `config` / `statusline` | Manual routing, resolved options and terminal summary |
+
+</details>
+
+## Local by design
+
+ShrinkGate binds loopback and forwards requests to your configured provider. It adds no telemetry or extra forwarding destination. It is intended for a trusted, single-user workstation.
+
+Prompts and auth headers are not journaled. Usage metadata stays local. Recovery snapshots can contain secrets already present in your agent settings; protect them and avoid sharing dry-run output.
+
+[Configuration, limits & Docker](docs/OPERATIONS.md) · [Security & privacy](SECURITY.md) · [Audit findings](docs/AUDIT.md)
+
+---
+
+**Help make the next release dependable.** Share a sanitized compatibility report, contribute a realistic fixture, or pick a task from the [roadmap](docs/ROADMAP.md). If ShrinkGate helps your workflow, a star helps others find it.
+
+<sub>Apache-2.0 · Not affiliated with Anthropic, OpenAI, Meta, or Context Shrink LLC.</sub>

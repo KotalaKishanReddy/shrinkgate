@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add reproducible installed-Codex fixture validation and a mixed-protocol soak harness with injected failures, cancellation, journal bounds and a daemon restart.
+- Record live-authentication and billing blockers separately from passing local tests; add a Linux CI soak smoke check.
+- Redesign the README with a visual header, release-aware quick start, evidence table and separate operations guide.
+
 - Enforce body limits during reads, add connection/header/read timeouts, bound concurrent connections and drain on SIGTERM/Ctrl+C.
 - Use full SHA-256, short accurate stubs and request-local deduplication: remove persistent session maps and the global transform lock; do not expand short blocks.
 - Deduplicate tool outputs by default; user/assistant text is opt-in. Preserve mixed-media chat messages.

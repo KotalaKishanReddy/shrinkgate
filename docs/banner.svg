@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-label="ShrinkGate — less repetition, more room to build. A local Rust gateway for coding agents.">
+<defs>
+ <linearGradient id="background" x2="1" y2="1"><stop stop-color="#101c2a"/><stop offset="1" stop-color="#09111c"/></linearGradient>
+ <linearGradient id="accent"><stop stop-color="#93e5c2"/><stop offset="1" stop-color="#75bcff"/></linearGradient>
+</defs>
+<rect width="1200" height="360" rx="20" fill="url(#background)"/>
+<path d="M660 0v360M0 310h1200" stroke="#243346" opacity=".6"/>
+<text x="50" y="53" fill="#93e5c2" font-family="ui-monospace,monospace" font-size="13" letter-spacing="2">LOCAL · OPEN SOURCE · RUST</text>
+<text x="48" y="131" fill="#f0f5fc" font-family="system-ui,sans-serif" font-size="48" font-weight="750" letter-spacing="-1.7">Less repetition.</text>
+<text x="48" y="193" fill="#f0f5fc" font-family="system-ui,sans-serif" font-size="48" font-weight="750" letter-spacing="-1.7">More room to build.</text>
+<text x="50" y="243" fill="#a9bed3" font-family="system-ui,sans-serif" font-size="19">Tool-output deduplication for coding agents.</text>
+<g font-family="ui-monospace,monospace" font-size="14">
+ <rect x="715" y="63" width="189" height="53" rx="9" fill="#152336" stroke="#364b63"/><text x="737" y="95" fill="#a9bed3">earlier copy</text>
+ <rect x="715" y="142" width="189" height="53" rx="9" fill="#152336" stroke="#364b63"/><text x="737" y="174" fill="#a9bed3">same output</text>
+ <path d="M923 90h65m-65 79h65M975 83l13 7-13 7m0 65 13 7-13 7" fill="none" stroke="#6996b5" stroke-width="1.6"/>
+ <text x="1005" y="95" fill="#93e5c2">hash stub</text><text x="1005" y="174" fill="#93e5c2">hash stub</text>
+ <rect x="715" y="221" width="430" height="53" rx="9" fill="#15312f" stroke="#93e5c2"/><circle cx="739" cy="248" r="5" fill="#93e5c2"/><text x="758" y="253" fill="#e2fff3">latest identical copy → kept verbatim</text>
+</g>
+<path d="M50 310h580" stroke="url(#accent)" stroke-width="2"/>
+<text x="50" y="340" fill="#8ba7c0" font-family="ui-monospace,monospace" font-size="13">Your agent → 127.0.0.1:18793 → Your provider</text>
+<text x="1075" y="340" fill="#8ba7c0" font-family="ui-monospace,monospace" font-size="13">Apache-2.0</text>
+</svg>

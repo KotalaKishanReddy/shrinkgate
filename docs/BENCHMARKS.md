@@ -21,3 +21,7 @@ The 12 built-in fixtures cover Messages, Chat Completions and Responses with rep
 5. Publish the sanitized task corpus, exact commands/versions, run counts, variability, provider pricing assumptions, outcome regressions, and cases with zero or negative cost benefit.
 
 No live provider benchmark or real-session cost/quality result has been collected by this audit. This is a release gate for quantitative marketing, not a promise that savings will match the fixture percentages.
+
+## Follow-up validation
+
+[VALIDATION.md](VALIDATION.md) records the installed-client smoke test, extended loopback soak, and the exact reason live authentication/billing comparisons remain blocked. The soak is a reliability exercise, not evidence of API cost savings.

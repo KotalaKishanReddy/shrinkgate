@@ -1,0 +1,54 @@
+{
+  "kind": "offline loopback soak; not live-agent, billing or multi-hour certification",
+  "version": "shrinkgate 0.1.2",
+  "date": "2026-11-17",
+  "platform": "Linux",
+  "requested_active_seconds": 600.0,
+  "elapsed_seconds": 601.55,
+  "workers": 8,
+  "protocols": [
+    "anthropic_messages",
+    "chat_completions",
+    "responses"
+  ],
+  "history": "32 paired tool calls/results per request; repeated outputs plus changed tail",
+  "restart_count": 1,
+  "phases": [
+    {
+      "phase": 1,
+      "success": 52159,
+      "expected_provider_errors": 1243,
+      "intentional_cancellations": 888,
+      "rss_start_kib": 3144,
+      "rss_end_kib": 8412,
+      "rss_peak_kib": 9532,
+      "retained_journal_requests": 54290,
+      "retained_failed_or_cancelled": 2131
+    },
+    {
+      "phase": 2,
+      "success": 52194,
+      "expected_provider_errors": 1244,
+      "intentional_cancellations": 889,
+      "rss_start_kib": 3144,
+      "rss_end_kib": 8632,
+      "rss_peak_kib": 9792,
+      "retained_journal_requests": 54157,
+      "retained_failed_or_cancelled": 2132
+    }
+  ],
+  "unexpected_failures": [],
+  "upstream_observations": {
+    "transformed": 108617,
+    "errors": 2487,
+    "cancelled": 1777
+  },
+  "journal_sizes_bytes": {
+    "usage.jsonl": 8294655,
+    "usage.previous.jsonl": 8388768
+  },
+  "cancelled_records_in_retained_history": 888,
+  "gateway_binary_sha256": "ea8c34d9833e84e7987f8e188c8de003ebae87ccd2ad2226c5b594a6c0addf05",
+  "tested_gateway_base_commit": "481e69dd945081c176ecd9a009096a1a1c71112f",
+  "measurement_notes": "Two five-minute active phases separated by a graceful restart; Linux RSS sampled approximately once per second. Short-lived peaks may be missed. Shared development environment."
+}

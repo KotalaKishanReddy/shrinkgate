@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-17",
+  "tested_gateway_base_commit": "481e69dd945081c176ecd9a009096a1a1c71112f",
+  "gateway_binary_sha256": "ea8c34d9833e84e7987f8e188c8de003ebae87ccd2ad2226c5b594a6c0addf05",
+  "live_codex_authentication": {
+    "status": "blocked",
+    "client": "codex-cli 0.167.0-alpha.4",
+    "baseline": "direct request without ShrinkGate",
+    "observed_http_status": 401,
+    "token_refresh": "failed; sign-in must be renewed",
+    "gateway_authentication_success_claimed": false
+  },
+  "live_claude_authentication": {
+    "status": "blocked",
+    "reason": "client and provider credentials unavailable"
+  },
+  "live_opencode_authentication": {
+    "status": "blocked",
+    "reason": "client and provider credentials unavailable"
+  },
+  "real_billing_savings": {
+    "status": "blocked",
+    "reason": "no metered provider credentials; user requested continuing without them",
+    "dollar_or_percentage_savings_claimed": false
+  },
+  "privacy": "Raw credential material, account identifiers, prompts and provider request IDs are not included in this report."
+}

@@ -39,6 +39,9 @@ jobs:
       - name: Local fixture benchmark (Windows)
         if: runner.os == 'Windows'
         run: .\target\release\shrinkgate.exe benchmark --iterations 10
+      - name: Mixed-protocol soak smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: python3 scripts/soak.py --duration 10 --workers 4 --output soak-ci.json
       - name: Unix installer syntax
         if: runner.os != 'Windows'
         run: sh -n scripts/install.sh

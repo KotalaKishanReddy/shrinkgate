@@ -34,7 +34,7 @@ CI additionally runs on Linux, macOS and Windows, checks PowerShell syntax, buil
 
 ## Remaining release gates and limits
 
-- No live model-provider credentials were used. Current agent-version/auth-mode acceptance, subscription behavior, real task quality, cached-token economics and long-session soak must be validated before a production release or quantitative savings launch.
+- Follow-up testing exercised the installed Codex client against a local Responses provider and a bounded Linux soak; see [VALIDATION.md](VALIDATION.md). Direct live Codex access returned HTTP 401 before the gateway was involved. Metered billing tests remain blocked by unavailable credentials. Live provider/auth acceptance, real task quality, cached-token economics and multi-hour sessions still require validation before a production release or quantitative savings launch.
 - The product is for a trusted single-user workstation, not hostile public/multi-tenant traffic. Other local applications can reach loopback. Recovery snapshots can contain pre-existing agent secrets; Unix permissions and Windows profile ACLs matter.
 - Rewriting can invalidate prompt caches and alter model interpretation. The local benchmark cannot establish net billed savings. The compatibility table intentionally lists live versions as unverified.
 - Resource limits are compiled defaults; an SSE response has no fixed lifetime. A slow or idle stream can occupy one connection slot. Journals retain roughly 16 MiB, not lifetime history; midnight boundaries are UTC. Journals describe forwarded responses/streams, not every rejected HTTP request or upstream connection failure.

@@ -4,11 +4,11 @@
 | --- | --- | --- |
 | Anthropic Messages | Tool-result dedup, protected blocks, mock SSE proxy | Current Claude Code versions; API-key and subscription auth |
 | Chat Completions | Tool outputs, media protection, mock SSE proxy | Current OpenCode adapter versions and selected providers |
-| OpenAI Responses | Function outputs, reasoning preservation, mock SSE proxy | Current Codex version, ChatGPT sign-in, API-key mode, cancellation |
+| OpenAI Responses | Function outputs, reasoning preservation, mock SSE proxy | Live provider/auth acceptance; installed Codex 0.167.0-alpha.4 passes a local fixture (streaming, dummy API-key forwarding, 401 handling and restore) |
 | Configuration | Dry runs, reconnect/restore, invalid data, lean isolation | OS-specific service lifecycle and real agent config evolution |
-| Platforms | CI matrix: Linux, macOS, Windows | End-user installation and long-session soak on all three |
+| Platforms | CI matrix: Linux, macOS, Windows | Long soak recorded on Linux only; live-agent/OS-specific service testing remains |
 
-Unverified live agent versions are deliberately not listed as certified. Profiles and existing proxy routing may be refused rather than guessed. HTTP/SSE is supported; WebSocket transport, arbitrary request compression, and public/multi-user deployments are not supported.
+See [the dated validation report](VALIDATION.md) for installed-client results and blocked live-auth/billing checks. A passing client fixture is deliberately not listed as live-provider certification. Profiles and existing proxy routing may be refused rather than guessed. HTTP/SSE is supported; WebSocket transport, arbitrary request compression, and public/multi-user deployments are not supported.
 
 Before tagging a release:
 
