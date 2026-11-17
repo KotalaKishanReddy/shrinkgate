@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ ShrinkGate
+# ShrinkGate
 
 **Local context-shrinking gateway for coding agents.**
 
