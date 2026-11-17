@@ -138,8 +138,8 @@ pub async fn run() -> anyhow::Result<()> {
         let rec: Value = tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
                 let text = std::fs::read_to_string(&file).unwrap_or_default();
-                if text.lines().count() == index + 1 {
-                    break serde_json::from_str(text.lines().last().unwrap()).unwrap();
+                if let Some(record) = complete_record(&text, index + 1) {
+                    break record;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
@@ -170,4 +170,28 @@ pub async fn run() -> anyhow::Result<()> {
         crate::paths::usage_file(&state_dir).display()
     );
     Ok(())
+}
+
+// A reader may observe a record between the writer's append calls.
+fn complete_record(text: &str, expected: usize) -> Option<Value> {
+    if !text.ends_with('\n') || text.lines().count() != expected {
+        return None;
+    }
+    serde_json::from_str(text.lines().last()?).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn waits_for_a_complete_valid_journal_line() {
+        assert!(complete_record("{\"status\":", 1).is_none());
+        assert!(complete_record("{\"status\":200}", 1).is_none());
+        assert!(complete_record("{broken}\n", 1).is_none());
+        assert!(complete_record("{}\n", 2).is_none());
+        assert_eq!(
+            complete_record("{\"status\":200}\n", 1).unwrap()["status"],
+            200
+        );
+    }
 }

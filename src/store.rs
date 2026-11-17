@@ -175,7 +175,8 @@ pub fn journal(state_dir: &Path, rec: &Record) {
             options.mode(0o600);
         }
         let mut f = options.open(file)?;
-        writeln!(f, "{}", rec.to_json())
+        let line = rec.to_json().to_string() + "\n";
+        f.write_all(line.as_bytes())
     })();
     if let Err(e) = result {
         eprintln!("shrinkgate: could not write usage metadata: {e}");

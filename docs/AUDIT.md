@@ -24,7 +24,7 @@ The transformer only deduplicates multiple copies **within a single request**. P
 ## Local validation
 
 - Linux locked release build, formatting and Clippy with warnings denied.
-- 38 passing tests: 31 unit/proxy tests plus 7 CLI integration tests. Coverage includes all three real loopback proxy routes, unchanged SSE bytes, fragmented SSE parsing, body limits, rejected inputs, routing precedence, protected content, deterministic replay, backups/reconnect/restore, dry runs, lean isolation, corrupt state, symlinks and guarded purge.
+- 39 passing tests: 32 unit/proxy tests plus 7 CLI integration tests. Coverage includes all three real loopback proxy routes, unchanged SSE bytes, fragmented SSE parsing, body limits, rejected inputs, routing precedence, protected content, deterministic replay, backups/reconnect/restore, dry runs, lean isolation, corrupt state, symlinks, guarded purge and partial journal-line reads.
 - Rust 1.85 check for all targets in this package (host platform), including tests.
 - Asserted three-turn offline proxy demo; 12 synthetic scenarios benchmarked with 500 iterations each. Results are in `benchmark.json`; timing is environment-specific.
 - Unix installer syntax and actual v0.1.2 download/checksum/install into an isolated temporary directory.
