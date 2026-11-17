@@ -1,23 +1,31 @@
+<div align="center">
+
 # ShrinkGate
 
-A **local context-shrinking gateway** for coding agents. One small Rust binary
-runs on `127.0.0.1:18793`; your coding agents (Claude Code, Codex, OpenCode,
-Muse Code, anything Anthropic- or OpenAI-compatible) send their model traffic
-through it, and it trims the content they **re-send on every turn** before it
-reaches the model API — with your own auth, streaming untouched.
+**A local context-shrinking gateway for coding agents.**
 
-Built for Linux as an independent, from-scratch alternative to
-[ContextShrink Code](https://code.contextshrink.com) (whose Windows-only
-engine ships today). The design was informed by studying the Apache-2.0
-connector packages on npm (`contextshrink-claude`, `contextshrink-codex`);
-no part of their closed engine was used or decompiled.
+One small Rust binary on `127.0.0.1:18793`. Your coding agents send their model
+traffic through it, and it trims the content they **re-send on every turn**
+before it reaches the model API — with your own auth, streaming untouched.
 
+[![CI](https://img.shields.io/github/actions/workflow/status/KotalaKishanReddy/shrinkgate/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate?style=flat-square)](https://github.com/KotalaKishanReddy/shrinkgate/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
+[![Container](https://img.shields.io/badge/image-ghcr.io-2496ED?logo=docker&style=flat-square)](https://github.com/KotalaKishanReddy/shrinkgate/pkgs/container/shrinkgate)
+
+*Independent, from-scratch alternative to [ContextShrink Code](https://code.contextshrink.com)
+(whose Windows-only engine ships today), built for Linux. The design was informed by
+studying the Apache-2.0 connector packages on npm (`contextshrink-claude`,
+`contextshrink-codex`); no part of their closed engine was used or decompiled.*
+
+```text
+Claude Code ──►                    ──► api.anthropic.com    (your API key)
+Codex       ──►  ShrinkGate        ──► api.openai.com / ChatGPT backend
+OpenCode    ──►  127.0.0.1:18793   ──► api.openai.com       (your API key)
+Muse Code   ──►                    ──► api.meta.ai          (your key)
 ```
-Claude Code ──► ShrinkGate (127.0.0.1:18793) ──► api.anthropic.com   (your API key)
-Codex       ──►                             ──► api.openai.com / ChatGPT backend (your login)
-OpenCode    ──►                             ──► api.openai.com     (your API key)
-Muse Code   ──►                             ──► api.meta.ai        (your key)
-```
+
+</div>
 
 ## How the shrink pass works
 
@@ -34,36 +42,48 @@ replaced by a short deterministic stub:
 > in this conversation (first seen in request #3, 18422 bytes). This duplicate
 > was trimmed locally to save context; the original text above is still accurate.`
 
-Properties:
-
-- **The newest occurrence is always verbatim** — the model always has the
-  current copy of any file or command output.
-- **Deterministic stubs** — the rewritten prefix is byte-identical from the
-  request after the first one, so the provider's prompt cache keeps hitting.
-- **Stubs say what happened** — first-seen request number and original size,
-  so the model can still reason about earlier context.
-- **Never touched**: system prompts, tool/function definitions, tool-use and
-  tool-call blocks, thinking/reasoning blocks, images, other media, and the
-  newest `keep_last_messages` (default 2) messages of the conversation.
-- **Never re-stubbed** — content that is already a stub is skipped, whatever
-  the size threshold.
-- **Idempotent + stateful per session** — sessions are keyed by model +
-  system prompt (+ metadata id), capped at `max_sessions` with LRU eviction.
+| Property | Guarantee |
+| --- | --- |
+| **Newest occurrence is verbatim** | the model always has the current copy of any file or command output |
+| **Deterministic stubs** | the rewritten prefix is byte-identical from the second request on, so the provider's prompt cache keeps hitting |
+| **Stubs say what happened** | first-seen request number and original size, so the model can still reason about earlier context |
+| **Never touched** | system prompts, tool/function definitions, tool-use and tool-call blocks, thinking/reasoning blocks, images and other media, and the newest `keep_last_messages` (default 2) messages |
+| **Never re-stubbed** | content that is already a stub is skipped, whatever the size threshold |
+| **Idempotent + stateful per session** | sessions keyed by model + system prompt (+ metadata id), capped at `max_sessions` with LRU eviction |
 
 Nothing is uploaded anywhere: fingerprinting, rewriting and journaling all
 happen locally. Auth headers pass through unchanged. Responses (SSE or
 buffered) stream through untouched; ShrinkGate only taps `usage` fields to
 keep a local savings journal.
 
-## Quick start
+## Install
+
+**Build from source** (Rust 1.85+):
 
 ```sh
 cargo build --release
-./target/release/shrinkgate demo          # 3-turn end-to-end demo, no keys needed
-./target/release/shrinkgate connect claude    # wire Claude Code + install service
-./target/release/shrinkgate status
-./target/release/shrinkgate uninstall claude  # restore previous settings
+./target/release/shrinkgate demo   # 3-turn end-to-end demo, no keys needed
 ```
+
+**Prebuilt binary** — from [Releases](https://github.com/KotalaKishanReddy/shrinkgate/releases):
+
+```sh
+curl -L https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-x86_64-linux.tar.gz \
+  | tar xz && ./shrinkgate demo
+```
+
+**Container image** — from `ghcr.io`:
+
+```sh
+docker run --rm --network host ghcr.io/kotalakishanreddy/shrinkgate
+```
+
+> The engine only ever binds `127.0.0.1` — that's the product's privacy
+> guarantee — so the container must use `--network host` to serve your host's
+> loopback port. Mount a volume at `/data` if you want the savings journal to
+> survive `--rm`.
+
+## Wire up an agent
 
 `connect` starts the engine (systemd user unit `shrinkgate.service` if
 available, else a detached process), copies the binary to
@@ -71,6 +91,12 @@ available, else a detached process), copies the binary to
 value of every key it touched. `uninstall` restores each key **only while it
 still holds what ShrinkGate wrote** — anything you changed since connect is
 left alone and reported.
+
+```sh
+./target/release/shrinkgate connect claude   # + install service
+./target/release/shrinkgate status
+./target/release/shrinkgate uninstall claude # restore previous settings
+```
 
 ### Claude Code
 
@@ -139,17 +165,17 @@ to `api.meta.ai`).
 
 Point it at the engine and pick the protocol by path:
 
-| Protocol               | Path                  | Upstream default            |
-|------------------------|-----------------------|------------------------------|
-| Anthropic Messages     | `POST /v1/messages`   | `https://api.anthropic.com`  |
-| OpenAI Chat Completions| `POST /v1/chat/completions` | `https://api.openai.com` |
-| OpenAI Responses       | `POST /v1/responses`  | OpenAI or ChatGPT backend    |
-| anything else          | any path              | reverse-proxied by guess     |
+| Protocol                | Path                        | Upstream default          |
+| ----------------------- | --------------------------- | ------------------------- |
+| Anthropic Messages      | `POST /v1/messages`         | `https://api.anthropic.com` |
+| OpenAI Chat Completions | `POST /v1/chat/completions` | `https://api.openai.com`  |
+| OpenAI Responses        | `POST /v1/responses`        | OpenAI or ChatGPT backend |
+| anything else           | any path                    | reverse-proxied by guess  |
 
 Or run `shrinkgate env` and set the printed variables
 (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`). A request header
-`x-shrinkgate-upstream: anthropic|openai|meta|opencode` forces the upstream (it is
-stripped before forwarding).
+`x-shrinkgate-upstream: anthropic|openai|meta|opencode` forces the upstream
+(it is stripped before forwarding).
 
 ## Commands
 
