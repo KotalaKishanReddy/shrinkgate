@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fix all seven reproduced follow-up audit defects: provider selection, lean-cycle backups, hook/service ownership, streaming error/completion accounting, cancelled-request usage and diagnostic exit status.
+- Give explicit provider/default routing precedence; stop guessing a provider from JWT-shaped tokens alone.
+- Add health protocol v2 with an effective-configuration fingerprint; preserve unmanaged services and uncertain legacy hook ownership.
+- Replace per-request blocking journal jobs with one worker and a 256-record queue, observable overflow and a bounded shutdown flush.
+- Add regression coverage for each issue, including deterministic stalled-storage backpressure and real loopback routing/SSE tests.
+
 - Add reproducible installed-Codex fixture validation and a mixed-protocol soak harness with injected failures, cancellation, journal bounds and a daemon restart.
 - Record live-authentication and billing blockers separately from passing local tests; add a Linux CI soak smoke check.
 - Redesign the README with a visual header, release-aware quick start, evidence table and separate operations guide.

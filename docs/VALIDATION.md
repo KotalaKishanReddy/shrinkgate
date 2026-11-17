@@ -1,5 +1,7 @@
 # Validation report — 2026-11-17
 
+For the subsequent correctness fixes and their new regression/client/soak results, see [AUDIT-FIXES.md](AUDIT-FIXES.md). This report retains the original run history.
+
 This report distinguishes actual client execution, local provider simulation, live authentication, and billed-cost measurement. The tested gateway binary is based on commit `481e69d`; no Rust source changes were needed for these follow-up checks. Binary SHA-256 values accompany the JSON records.
 
 | Check | Result | What it establishes |

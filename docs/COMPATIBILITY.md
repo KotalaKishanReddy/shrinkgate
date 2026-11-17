@@ -10,6 +10,8 @@
 
 See [the dated validation report](VALIDATION.md) for installed-client results and blocked live-auth/billing checks. A passing client fixture is deliberately not listed as live-provider certification. Profiles and existing proxy routing may be refused rather than guessed. HTTP/SSE is supported; WebSocket transport, arbitrary request compression, and public/multi-user deployments are not supported.
 
+The follow-up [audit fixes](AUDIT-FIXES.md) require restarting older daemons for health protocol v2. ChatGPT routing uses its account header rather than token-shape guessing; live authentication still needs a valid baseline.
+
 Before tagging a release:
 
 - Run CI, dependency audit, locked release tests/build, demo, benchmark and installer checks.

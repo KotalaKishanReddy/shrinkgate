@@ -172,8 +172,8 @@ pub fn command_path(path: &Path) -> String {
     }
 }
 
-/// GET /healthz on the local engine. Short timeout.
-pub async fn engine_healthy(port: u16) -> bool {
+/// Read bounded health metadata. Configuration/version checks are explicit.
+pub async fn engine_info(port: u16) -> Option<Value> {
     let probe = async {
         use http_body_util::BodyExt;
         let req = hyper::Request::builder()
@@ -190,24 +190,89 @@ pub async fn engine_healthy(port: u16) -> bool {
             .ok()?
             .to_bytes();
         let v: Value = serde_json::from_slice(&bytes).ok()?;
-        Some(
-            v["engine"] == "shrinkgate"
-                && v["ok"] == true
-                && v["port"] == port
-                && v["version"] == env!("CARGO_PKG_VERSION"),
-        )
+        if v["engine"] == "shrinkgate" && v["ok"] == true && v["port"] == port {
+            Some(v)
+        } else {
+            None
+        }
     };
     tokio::time::timeout(std::time::Duration::from_millis(700), probe)
         .await
         .ok()
         .flatten()
-        .unwrap_or(false)
+}
+
+pub fn health_matches(info: &Value, cfg: &Config) -> bool {
+    info["version"] == env!("CARGO_PKG_VERSION")
+        && info["health_protocol"] == 2
+        && info["config_fingerprint"] == cfg.fingerprint()
+}
+
+pub async fn engine_matches(cfg: &Config) -> bool {
+    engine_info(cfg.port)
+        .await
+        .is_some_and(|v| health_matches(&v, cfg))
+}
+
+/// Inspect managed configuration rather than parsing human-readable status text.
+pub fn wiring_issues() -> Vec<String> {
+    let mut issues = Vec::new();
+    for (agent, path) in [
+        ("claude", crate::paths::claude_dir().join("settings.json")),
+        ("codex", crate::paths::codex_dir().join("config.toml")),
+        ("opencode", crate::paths::opencode_config()),
+    ] {
+        let check = (|| -> anyhow::Result<()> {
+            let state = read_state(agent)?;
+            let current = read_optional(&path)?;
+            if let Some(ref text) = current {
+                if agent == "codex" {
+                    text.parse::<toml_edit::DocumentMut>()?;
+                } else {
+                    anyhow::ensure!(
+                        serde_json::from_str::<Value>(text)?.is_object(),
+                        "settings must be an object"
+                    );
+                }
+            }
+            if let Some(state) = state {
+                if agent == "claude" {
+                    let doc: Value = serde_json::from_str(current.as_deref().unwrap_or("{}"))?;
+                    for (key, value) in state["written"].as_object().unwrap() {
+                        anyhow::ensure!(
+                            lookup(&doc, key) == Some(value),
+                            "managed setting {key} changed or is missing"
+                        );
+                    }
+                    if state.pointer("/hook/added").and_then(Value::as_bool) == Some(true) {
+                        anyhow::ensure!(
+                            lookup(&doc, "hooks.SessionStart")
+                                .and_then(Value::as_array)
+                                .is_some_and(|entries| entries.contains(&state["hook"]["entry"])),
+                            "managed SessionStart hook changed or is missing"
+                        );
+                    }
+                } else {
+                    anyhow::ensure!(
+                        current.as_deref() == state["written"].as_str(),
+                        "managed configuration changed or is missing"
+                    );
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = check {
+            issues.push(format!("{agent}: {e}"));
+        }
+    }
+    issues
 }
 
 /// Starts the engine if it is not already answering. Tries the systemd user
 /// unit first, then spawns a detached `serve` as a fallback.
 pub async fn ensure_engine(cfg: &Config) -> anyhow::Result<bool> {
-    if engine_healthy(cfg.port).await {
+    if let Some(info) = engine_info(cfg.port).await {
+        anyhow::ensure!(health_matches(&info, cfg), "an engine is running with a different configuration/version; stop and restart it before connecting");
         return Ok(true);
     }
     if !systemd::start() {
@@ -215,7 +280,7 @@ pub async fn ensure_engine(cfg: &Config) -> anyhow::Result<bool> {
     }
     for _ in 0..50 {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        if engine_healthy(cfg.port).await {
+        if engine_matches(cfg).await {
             return Ok(true);
         }
     }
@@ -270,19 +335,14 @@ pub fn spawn_detached_serve(cfg: &Config) {
 /// `shrinkgate serve --ensure` command line used by Claude Code's SessionStart
 /// hook: exits immediately when healthy, otherwise starts the engine.
 pub async fn ensure_command(cfg: &Config) -> i32 {
-    if engine_healthy(cfg.port).await {
-        return 0;
-    }
-    if !systemd::start() {
-        spawn_detached_serve(cfg);
-    }
-    for _ in 0..100 {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        if engine_healthy(cfg.port).await {
-            return 0;
+    match ensure_engine(cfg).await {
+        Ok(true) => 0,
+        Ok(false) => 1,
+        Err(e) => {
+            eprintln!("shrinkgate ensure: {e:#}");
+            1
         }
     }
-    1
 }
 
 /// Dotted-path get/set/remove on a settings JSON document.

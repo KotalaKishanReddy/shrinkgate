@@ -15,7 +15,7 @@ allow_assistant_text = false
 # default_upstream = "openai"
 ```
 
-Restart after changes. Invalid/unknown options fail explicitly. The deprecated `max_sessions` key is accepted but ignored because transformation is stateless. Responses API tail protection counts input items, including tool-call items.
+Restart after changes. Health protocol v2 compares the active configuration fingerprint and version; stop/restart older or differently configured daemons before connecting with this revision. Invalid/unknown options fail explicitly. The deprecated `max_sessions` key is accepted but ignored because transformation is stateless. Responses API tail protection counts input items, including tool-call items.
 
 User/assistant text deduplication is opt-in: repeated instructions and historical placement can be intentional. Tool outputs containing mixed media are excluded. A sole copy in the current request is never removed based on earlier requests.
 
@@ -32,19 +32,23 @@ User/assistant text deduplication is opt-in: repeated instructions and historica
 | Graceful shutdown drain | Up to 10 seconds |
 | Usage journals | Approximately 8 MiB each, one previous file retained |
 
-SSE responses stream incrementally with no fixed lifetime limit. A stalled stream can occupy a connection slot. Serve runs in the foreground; Ctrl+C or SIGTERM drains connections. Services use systemd on Linux or launchd on macOS; Windows uses a detached process. Stop detached processes before purging shared state.
+SSE responses stream incrementally with no fixed lifetime limit. Accounting requires a protocol completion marker (`message_stop`, `response.completed` or `[DONE]`). API error events, incomplete streams and transport failures do not earn estimated reduction credit; response bytes and HTTP status are forwarded unchanged. A stalled stream can occupy a connection slot. Serve runs in the foreground; Ctrl+C or SIGTERM drains connections. Services use systemd on Linux or launchd on macOS; Windows uses a detached process. Stop detached processes before purging shared state.
 
 ## Safe connection and recovery
 
 `connect <agent> --dry-run` prints the proposed agent configuration without writing it, starting services or installing a binary. The output can contain secrets already present in original settings; do not post it publicly.
 
-Connection saves a recovery snapshot before replacing settings. Reconnect preserves the first snapshot; uninstall before changing options or the gateway port. Externally edited settings and recovery data are retained. Symlink destinations are refused instead of silently replaced.
+Connection saves a recovery snapshot before replacing settings. Hook ownership is explicit: uninstall removes only hooks the connection added. Legacy snapshots with uncertain ownership keep the hook and warn for manual review. Each new lean-management cycle records its own original value. Reconnect preserves the first snapshot; uninstall before changing options or the gateway port. Externally edited settings and recovery data are retained. Symlink destinations are refused instead of silently replaced.
+
+Service files have a separate ownership snapshot. Existing services without that snapshot, including older installations, are preserved rather than overwritten, started or deleted automatically. Externally edited managed services and their snapshots are also retained. Use the existing service manager for manual migration.
 
 `uninstall <agent> --purge` refuses to delete shared state while another integration or a listening engine remains. It retains the configuration lock file. Agent backups can contain pre-existing secrets; Unix files use private permissions and Windows relies on your profile ACLs. A crash between separate recovery/config writes may need manual restoration from the saved snapshot.
 
 ## Statistics
 
-`stats --json` separates estimated candidate-byte reductions from provider-reported usage. It does not calculate billed savings. Failed/cancelled forwarded requests do not earn reduction credit. Retained journals do not include every rejected HTTP request or upstream connection failure.
+`stats --json` separates estimated candidate-byte reductions from provider-reported usage. It does not calculate billed savings. Failed/cancelled forwarded requests do not earn reduction credit. Their observed provider usage is included in `provider_usage` totals and separately in its `failed_or_cancelled` group; cancellation does not imply zero billed usage. Historical stream records cannot be reclassified retroactively without their original events. Retained journals do not include every rejected HTTP request or upstream connection failure.
+
+One disk worker consumes a bounded queue of 256 metadata records. When the queue is full or closed, new records are dropped while API traffic continues; power-of-two warnings go to stderr and `/healthz` reports `journal_dropped_records`. `doctor` fails if that running daemon has dropped records. The counter resets on daemon restart; summaries can be incomplete after overflow. Shutdown allows up to five additional seconds to flush the journal after the connection drain.
 
 Journals contain metadata, never prompt bodies or auth headers: timestamps, route, a derived session fingerprint, status, latency, estimates and provider usage. The fingerprint is pseudonymous, not guaranteed anonymous. Totals cover retained history, not lifetime usage. Day boundaries are UTC.
 

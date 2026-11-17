@@ -2,6 +2,8 @@
 
 Scope: source-level review of the gateway, three protocol transformers, usage storage, CLI/configuration, four agent helpers, service adapters, installation, CI/release workflows, container and public documentation. This is a maintainer engineering audit, not an independent security certification.
 
+Follow-up defects and their fixes are tracked in [AUDIT-FIXES.md](AUDIT-FIXES.md). Earlier validation below describes its historical revision.
+
 ## Findings addressed
 
 | Area | Fix and rationale |

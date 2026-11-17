@@ -26,7 +26,7 @@ pub struct Config {
     /// Codex ChatGPT-login backend (responses API). The leading `/v1` of the
     /// request path is stripped when routing here.
     pub upstream_chatgpt: String,
-    /// Upstream for unrecognized paths: "anthropic" | "openai" | "meta".
+    /// Default for OpenAI-format routes and unrecognized paths. Messages use Anthropic unless explicitly overridden.
     pub default_upstream: String,
 }
 
@@ -50,6 +50,11 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Identifies the effective configuration without exposing upstream URLs.
+    pub fn fingerprint(&self) -> String {
+        crate::store::fingerprint(&[b"shrinkgate/config/v2", format!("{self:?}").as_bytes()])
+    }
+
     pub fn load() -> anyhow::Result<Self> {
         let mut cfg = Self::default();
         let file = crate::paths::config_file();

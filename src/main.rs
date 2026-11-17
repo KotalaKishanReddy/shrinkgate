@@ -309,13 +309,26 @@ async fn uninstall_agent(agent: &str, purge: bool) -> anyhow::Result<bool> {
 }
 
 async fn print_status(cfg: &Config, agent: Option<&str>) {
-    let healthy = wire::engine_healthy(cfg.port).await;
+    let info = wire::engine_info(cfg.port).await;
+    let healthy = info.as_ref().is_some_and(|v| wire::health_matches(v, cfg));
     println!(
-        "engine: {} at {} (shrink: {})",
-        if healthy { "running" } else { "NOT running" },
+        "engine: {} at {} (configured shrink: {})",
+        if healthy {
+            "running (configuration matches)"
+        } else if info.is_some() {
+            "running (configuration/version mismatch)"
+        } else {
+            "NOT running"
+        },
         cfg.engine_url(),
         cfg.shrink
     );
+    if let Some(ref active) = info {
+        println!(
+            "active engine: shrink={}, journal dropped metadata={}",
+            active["shrink"], active["journal_dropped_records"]
+        );
+    }
     let (today_s, today_n, all_s, all_n) = store::totals(&paths::state_dir());
     println!("estimated reductions (UTC): −{today_s} tok today ({today_n} req) · −{all_s} est. tok retained ({all_n} req)");
     match agent {

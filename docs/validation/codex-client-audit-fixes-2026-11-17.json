@@ -1,0 +1,89 @@
+{
+  "kind": "actual installed client with loopback provider fixture; not live-provider validation",
+  "client": "codex-cli 0.167.0-alpha.4",
+  "gateway": "shrinkgate 0.1.2",
+  "gateway_binary_sha256": "776dcb00970aaafde1237fed011544ad52e54990d009769812af88d8baf54270",
+  "date": "2026-11-17",
+  "dummy_auth_header_forwarded": true,
+  "direct_fixture_turn": "passed",
+  "wired_fixture_turn": "passed",
+  "streamed_answer_preserved": true,
+  "upstream_401_fails_client_turn": true,
+  "connect_uninstall_restores_config": true,
+  "observed_requests": [
+    {
+      "path": "/v1/responses",
+      "stream": true,
+      "model": "fixture-model",
+      "status": 200
+    },
+    {
+      "path": "/v1/responses",
+      "stream": true,
+      "model": "fixture-model",
+      "status": 200
+    },
+    {
+      "path": "/v1/responses",
+      "stream": true,
+      "model": "fixture-model",
+      "status": 401
+    },
+    {
+      "path": "/v1/responses",
+      "stream": true,
+      "model": "fixture-model",
+      "status": 401
+    },
+    {
+      "path": "/v1/responses",
+      "stream": true,
+      "model": "fixture-model",
+      "status": 401
+    },
+    {
+      "path": "/v1/responses",
+      "stream": true,
+      "model": "fixture-model",
+      "status": 401
+    },
+    {
+      "path": "/v1/responses",
+      "stream": true,
+      "model": "fixture-model",
+      "status": 401
+    },
+    {
+      "path": "/v1/responses",
+      "stream": true,
+      "model": "fixture-model",
+      "status": 401
+    }
+  ],
+  "journal_summary": {
+    "scope": "retained local journals (up to approximately 16 MiB)",
+    "estimator": "candidate UTF-8 bytes / 4; not billed savings",
+    "day_timezone": "UTC",
+    "requests": 7,
+    "failed_or_cancelled_requests": 6,
+    "successful_requests": 1,
+    "estimated_saved_tokens": 0,
+    "today_estimated_saved_tokens": 0,
+    "today_successful_requests": 1,
+    "provider_usage": {
+      "requests_with_usage": 1,
+      "input_tokens": 100,
+      "output_tokens": 7,
+      "cache_read_tokens": 0,
+      "cache_creation_tokens": 0,
+      "scope": "all observed usage, including failed/cancelled requests; not an invoice",
+      "failed_or_cancelled": {
+        "requests_with_usage": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0
+      }
+    }
+  }
+}

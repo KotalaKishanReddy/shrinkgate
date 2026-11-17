@@ -1,0 +1,41 @@
+{
+  "date": "2026-11-17",
+  "source_base_commit": "1fad32eba868ac64a97ea9718a6379f9f1642647",
+  "gateway_binary_sha256": "776dcb00970aaafde1237fed011544ad52e54990d009769812af88d8baf54270",
+  "local_platform": "Linux",
+  "release_tests": {
+    "unit_and_proxy": 40,
+    "audit_cli_regressions": 8,
+    "existing_cli_regressions": 7,
+    "total": 55,
+    "status": "passed"
+  },
+  "clippy": "passed with warnings denied",
+  "formatting": "passed",
+  "rust_1_85_all_targets_check": "passed",
+  "asserted_demo": "passed",
+  "installed_codex_fixture": "passed",
+  "soak": {
+    "active_seconds": 120,
+    "workers": 8,
+    "requests": 21674,
+    "unexpected_failures": 0,
+    "restart_count": 1,
+    "all_submitted_records_retained": true
+  },
+  "resolved_findings": [
+    "wrong-provider routing",
+    "stale lean backups",
+    "preexisting hook deletion",
+    "unowned service overwrite/deletion",
+    "SSE error/incomplete success credit",
+    "cancelled usage omitted",
+    "false-green diagnostics",
+    "unbounded journal backlog"
+  ],
+  "open_release_gates": [
+    "valid live-provider authentication",
+    "metered billing/task-quality comparison",
+    "multi-hour live-agent validation"
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "kind": "offline loopback soak; not live-agent, billing or multi-hour certification",
+  "version": "shrinkgate 0.1.2",
+  "gateway_binary_sha256": "776dcb00970aaafde1237fed011544ad52e54990d009769812af88d8baf54270",
+  "date": "2026-11-17",
+  "platform": "Linux",
+  "requested_active_seconds": 120.0,
+  "elapsed_seconds": 120.96,
+  "workers": 8,
+  "protocols": [
+    "anthropic_messages",
+    "chat_completions",
+    "responses"
+  ],
+  "history": "32 paired tool calls/results per request; repeated outputs plus changed tail",
+  "restart_count": 1,
+  "phases": [
+    {
+      "phase": 1,
+      "success": 10385,
+      "expected_provider_errors": 248,
+      "intentional_cancellations": 177,
+      "rss_start_kib": 3240,
+      "rss_end_kib": 8092,
+      "rss_peak_kib": 8352,
+      "retained_journal_requests": 10810,
+      "retained_failed_or_cancelled": 425
+    },
+    {
+      "phase": 2,
+      "success": 10439,
+      "expected_provider_errors": 248,
+      "intentional_cancellations": 177,
+      "rss_start_kib": 3340,
+      "rss_end_kib": 7784,
+      "rss_peak_kib": 8604,
+      "retained_journal_requests": 21674,
+      "retained_failed_or_cancelled": 850
+    }
+  ],
+  "unexpected_failures": [],
+  "upstream_observations": {
+    "transformed": 21674,
+    "errors": 496,
+    "cancelled": 354
+  },
+  "journal_sizes_bytes": {
+    "usage.jsonl": 7281292
+  },
+  "cancelled_records_in_retained_history": 354
+}

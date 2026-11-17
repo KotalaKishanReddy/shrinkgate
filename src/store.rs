@@ -4,8 +4,10 @@ use ring::digest::{Context, SHA256};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write as _};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::{mpsc, oneshot};
 
 pub fn now_ms() -> u64 {
     SystemTime::now()
@@ -125,6 +127,7 @@ pub struct Record {
     pub status: u16,
     pub ms: u128,
     pub usage: Option<Usage>,
+    pub stream_outcome: Option<&'static str>,
 }
 
 impl Record {
@@ -139,6 +142,7 @@ impl Record {
             "saved_tokens": est_tokens(self.saved_bytes),
             "blocks": self.blocks_stubbed,
             "status": self.status,
+            "stream_outcome": self.stream_outcome,
             "ms": self.ms,
             "usage": self.usage.map(|u| json!({
                 "input_tokens": u.input_tokens,
@@ -147,6 +151,63 @@ impl Record {
                 "output_tokens": u.output_tokens,
             })),
         })
+    }
+}
+
+const JOURNAL_QUEUE_CAPACITY: usize = 256;
+enum JournalCommand {
+    Record(Record),
+    Flush(oneshot::Sender<()>),
+}
+
+/// One disk worker and a bounded queue. Overflow never blocks API responses:
+/// it drops new metadata, increments a health counter and reports the loss.
+pub struct Journal {
+    tx: mpsc::Sender<JournalCommand>,
+    dropped: Arc<AtomicU64>,
+}
+impl Journal {
+    pub fn new(dir: std::path::PathBuf) -> anyhow::Result<Self> {
+        Self::with_writer(JOURNAL_QUEUE_CAPACITY, move |record| journal(&dir, &record))
+    }
+    fn with_writer(
+        capacity: usize,
+        writer: impl Fn(Record) + Send + 'static,
+    ) -> anyhow::Result<Self> {
+        let (tx, mut rx) = mpsc::channel(capacity);
+        std::thread::Builder::new()
+            .name("shrinkgate-journal".into())
+            .spawn(move || {
+                while let Some(command) = rx.blocking_recv() {
+                    match command {
+                        JournalCommand::Record(record) => writer(record),
+                        JournalCommand::Flush(done) => {
+                            let _ = done.send(());
+                        }
+                    }
+                }
+            })?;
+        Ok(Self {
+            tx,
+            dropped: Arc::new(AtomicU64::new(0)),
+        })
+    }
+    pub fn submit(&self, record: Record) {
+        if self.tx.try_send(JournalCommand::Record(record)).is_err() {
+            let count = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            if count.is_power_of_two() {
+                eprintln!("shrinkgate: usage journal queue unavailable/full; {count} metadata records dropped (API traffic continues)");
+            }
+        }
+    }
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+    pub async fn flush(&self) {
+        let (done, completed) = oneshot::channel();
+        if self.tx.send(JournalCommand::Flush(done)).await.is_ok() {
+            let _ = completed.await;
+        }
     }
 }
 
@@ -196,6 +257,11 @@ pub fn summary(state_dir: &Path) -> Value {
     let mut cached = 0u64;
     let mut cache_write = 0u64;
     let mut measured = 0u64;
+    let mut failed_usage_requests = 0u64;
+    let mut failed_input = 0u64;
+    let mut failed_output = 0u64;
+    let mut failed_cached = 0u64;
+    let mut failed_cache_write = 0u64;
     let day_start = now_ms() / 86_400_000 * 86_400_000;
     for path in [
         state_dir.join("usage.previous.jsonl"),
@@ -210,7 +276,23 @@ pub fn summary(state_dir: &Path) -> Value {
             };
             let num = |key: &str| v.get(key).and_then(Value::as_u64).unwrap_or(0);
             requests += 1;
-            if !(200..300).contains(&num("status")) {
+            let success = (200..300).contains(&num("status"));
+            if let Some(usage) = v.get("usage").filter(|u| u.is_object()) {
+                measured += 1;
+                let read = |key: &str| usage[key].as_u64().unwrap_or(0);
+                input += read("input_tokens");
+                output += read("output_tokens");
+                cached += read("cache_read");
+                cache_write += read("cache_creation");
+                if !success {
+                    failed_usage_requests += 1;
+                    failed_input += read("input_tokens");
+                    failed_output += read("output_tokens");
+                    failed_cached += read("cache_read");
+                    failed_cache_write += read("cache_creation");
+                }
+            }
+            if !success {
                 failed += 1;
                 continue;
             }
@@ -218,13 +300,6 @@ pub fn summary(state_dir: &Path) -> Value {
             if num("ts") >= day_start {
                 today_saved += num("saved_tokens");
                 today_requests += 1;
-            }
-            if let Some(usage) = v.get("usage").filter(|u| u.is_object()) {
-                measured += 1;
-                input += usage["input_tokens"].as_u64().unwrap_or(0);
-                output += usage["output_tokens"].as_u64().unwrap_or(0);
-                cached += usage["cache_read"].as_u64().unwrap_or(0);
-                cache_write += usage["cache_creation"].as_u64().unwrap_or(0);
             }
         }
     }
@@ -234,7 +309,10 @@ pub fn summary(state_dir: &Path) -> Value {
         "estimated_saved_tokens": saved, "today_estimated_saved_tokens": today_saved,
         "today_successful_requests": today_requests,
         "provider_usage": {"requests_with_usage": measured, "input_tokens": input, "output_tokens": output,
-            "cache_read_tokens": cached, "cache_creation_tokens": cache_write}})
+            "cache_read_tokens": cached, "cache_creation_tokens": cache_write,
+            "scope": "all observed usage, including failed/cancelled requests; not an invoice",
+            "failed_or_cancelled": {"requests_with_usage": failed_usage_requests, "input_tokens": failed_input,
+                "output_tokens": failed_output, "cache_read_tokens": failed_cached, "cache_creation_tokens": failed_cache_write}}})
 }
 
 /// (today estimated reductions, today successful requests, retained reductions, retained successful requests).
@@ -362,5 +440,66 @@ mod tests {
         assert_eq!(report["requests"], 3);
         assert_eq!(report["failed_or_cancelled_requests"], 2);
         assert_eq!(report["estimated_saved_tokens"], 12);
+    }
+}
+
+#[cfg(test)]
+mod audit_regressions {
+    use super::*;
+    fn record() -> Record {
+        Record {
+            route: "test",
+            session: "fixture".into(),
+            est_orig_bytes: 0,
+            est_sent_bytes: 0,
+            saved_bytes: 0,
+            blocks_stubbed: 0,
+            status: 200,
+            ms: 0,
+            usage: None,
+            stream_outcome: None,
+        }
+    }
+    #[tokio::test]
+    async fn slow_writer_has_bounded_backlog_and_explicit_overflow() {
+        let (started, ready) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let processed = Arc::new(AtomicU64::new(0));
+        let count = processed.clone();
+        let journal = Journal::with_writer(1, move |_| {
+            if count.fetch_add(1, Ordering::Relaxed) == 0 {
+                started.send(()).unwrap();
+                blocked.recv().unwrap();
+            }
+        })
+        .unwrap();
+        journal.submit(record());
+        ready.recv().unwrap();
+        journal.submit(record());
+        journal.submit(record());
+        assert_eq!(journal.dropped(), 1);
+        assert_eq!(journal.tx.capacity(), 0);
+        release.send(()).unwrap();
+        journal.flush().await;
+        assert_eq!(processed.load(Ordering::Relaxed), 2);
+    }
+    #[test]
+    fn failed_usage_is_in_totals_without_earning_savings_credit() {
+        let dir = tempfile::tempdir().unwrap();
+        let failed = json!({"ts":now_ms(),"status":499,"saved_tokens":999,
+            "usage":{"input_tokens":123,"output_tokens":7,"cache_read":10,"cache_creation":2}});
+        std::fs::write(dir.path().join("usage.jsonl"), format!("{failed}\n")).unwrap();
+        let report = summary(dir.path());
+        assert_eq!(report["estimated_saved_tokens"], 0);
+        assert_eq!(report["provider_usage"]["input_tokens"], 123);
+        assert_eq!(report["provider_usage"]["output_tokens"], 7);
+        assert_eq!(
+            report["provider_usage"]["failed_or_cancelled"]["cache_read_tokens"],
+            10
+        );
+        assert_eq!(
+            report["provider_usage"]["failed_or_cancelled"]["requests_with_usage"],
+            1
+        );
     }
 }

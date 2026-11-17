@@ -54,10 +54,14 @@ impl Harness {
         o
     }
     pub fn start(&mut self) {
+        self.start_with(&[]);
+    }
+    pub fn start_with(&mut self, args: &[&str]) {
         drop(self.socket.take());
         self.child = Some(
             self.command()
                 .args(["serve", "--quiet"])
+                .args(args)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()

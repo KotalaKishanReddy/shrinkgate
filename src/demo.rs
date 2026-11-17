@@ -24,7 +24,7 @@ async fn mock_messages(
     let n = (bytes.len() / 4) as i64;
     let sse = format!(
         "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_mock\",\"role\":\"assistant\",\"content\":[],\"usage\":{{\"input_tokens\":{n},\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}}}}\n\n\
-         event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"output_tokens\":9}}}}\n\n"
+         event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"output_tokens\":9}}}}\n\nevent: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n"
     );
     Ok(Response::builder()
         .status(200)
@@ -66,7 +66,7 @@ pub async fn run() -> anyhow::Result<()> {
     let state_dir = temp.path().to_path_buf();
     let state = Arc::new(AppState {
         clt: make_client(),
-        state_dir: state_dir.clone(),
+        journal: crate::store::Journal::new(state_dir.clone())?,
         cfg: cfg.clone(),
     });
 

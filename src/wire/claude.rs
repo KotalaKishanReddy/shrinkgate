@@ -145,11 +145,12 @@ pub async fn connect(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if !session_start.iter().any(|e| {
+    let hook_added = !session_start.iter().any(|e| {
         serde_json::to_string(e)
             .map(|s| s == entry_json)
             .unwrap_or(false)
-    }) {
+    });
+    if hook_added {
         session_start.push(hook_entry.clone());
     }
 
@@ -182,6 +183,7 @@ pub async fn connect(
             "existed": hook_existed,
             "session_start_existed": session_start_existed,
             "entry": hook_entry,
+            "added": hook_added,
         },
         "lean": lean_managed,
         "statusline": statusline,
@@ -228,12 +230,24 @@ pub fn status(cfg: &Config) -> String {
                 .unwrap_or("");
             match &state {
                 Some(st)
-                    if lookup(&settings, BASE_URL_KEY)
-                        == st.get("written").and_then(|w| w.get(BASE_URL_KEY)) =>
+                    if st
+                        .get("written")
+                        .and_then(|w| w.get(BASE_URL_KEY))
+                        .is_some()
+                        && lookup(&settings, BASE_URL_KEY)
+                            == st.get("written").and_then(|w| w.get(BASE_URL_KEY)) =>
                 {
                     lines.push(format!(
                         "claude: connected through the ShrinkGate engine at {base}"
                     ));
+                }
+                Some(st)
+                    if st
+                        .get("written")
+                        .and_then(|w| w.get(BASE_URL_KEY))
+                        .is_none() =>
+                {
+                    lines.push("claude: routing not managed (lean settings/recovery only)".into())
                 }
                 Some(_) => {
                     lines.push("claude: settings.json no longer matches what ShrinkGate wrote. Run `shrinkgate uninstall claude` to restore.".into());
@@ -290,8 +304,23 @@ pub fn uninstall(_cfg: &Config) -> anyhow::Result<bool> {
 
     let mut leftovers = restore_written(&mut settings, &state);
 
-    // Remove our SessionStart hook entry, whatever the state says.
-    if let Some(entry) = state.pointer("/hook/entry") {
+    // Legacy snapshots cannot prove ownership when SessionStart already existed.
+    let hook_owned = state
+        .pointer("/hook/added")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            state
+                .pointer("/hook/session_start_existed")
+                .and_then(Value::as_bool)
+                == Some(false)
+        });
+    if state.pointer("/hook/entry").is_some()
+        && state.pointer("/hook/added").is_none()
+        && !hook_owned
+    {
+        eprintln!("shrinkgate: legacy hook ownership is uncertain; SessionStart entry kept for manual review");
+    }
+    if let Some(entry) = state.pointer("/hook/entry").filter(|_| hook_owned) {
         if let Some(arr) =
             lookup_mut(&mut settings, "hooks.SessionStart").and_then(Value::as_array_mut)
         {
@@ -303,14 +332,20 @@ pub fn uninstall(_cfg: &Config) -> anyhow::Result<bool> {
             if arr.len() == before {
                 leftovers.push("hooks.SessionStart (entry not found)".into());
             }
-            if arr.is_empty() {
+            if arr.is_empty()
+                && state
+                    .pointer("/hook/session_start_existed")
+                    .and_then(Value::as_bool)
+                    != Some(true)
+            {
                 remove_path(&mut settings, "hooks.SessionStart");
             }
         }
-        if lookup(&settings, "hooks")
-            .and_then(Value::as_object)
-            .map(|o| o.is_empty())
-            .unwrap_or(false)
+        if state.pointer("/hook/existed").and_then(Value::as_bool) != Some(true)
+            && lookup(&settings, "hooks")
+                .and_then(Value::as_object)
+                .map(|o| o.is_empty())
+                .unwrap_or(false)
         {
             remove_path(&mut settings, "hooks");
         }
@@ -390,7 +425,10 @@ pub fn lean(action: &str, force: bool) -> anyhow::Result<i32> {
                 Some(text) => serde_json::from_str(&text)?,
                 None => json!({}),
             };
-            anyhow::ensure!(settings.is_object(), "settings must be a JSON object");
+            anyhow::ensure!(
+                settings.is_object() && settings.get("env").is_none_or(Value::is_object),
+                "settings and env must be JSON objects"
+            );
             let mut state = crate::wire::read_state("claude")?.unwrap_or(json!({
                 "version": 1, "written": {}, "previous": {},
                 "connected_at": now_iso(),
@@ -417,8 +455,7 @@ pub fn lean(action: &str, force: bool) -> anyhow::Result<i32> {
                         .or_insert(json!({}))
                         .as_object_mut()
                         .unwrap()
-                        .entry(LEAN_KEY)
-                        .or_insert(prev);
+                        .insert(LEAN_KEY.to_string(), prev);
                     state
                         .as_object_mut()
                         .unwrap()
@@ -462,6 +499,9 @@ pub fn lean(action: &str, force: bool) -> anyhow::Result<i32> {
                     .and_then(Value::as_object_mut)
                 {
                     w.remove(LEAN_KEY);
+                }
+                if let Some(previous) = state.get_mut("previous").and_then(Value::as_object_mut) {
+                    previous.remove(LEAN_KEY);
                 }
                 crate::wire::persist_connection(
                     "claude",

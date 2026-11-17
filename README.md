@@ -101,6 +101,8 @@ The built-in fixtures include repeated output, unique output, changed files and 
 
 ## Tested, not assumed
 
+The [follow-up audit fixes](docs/AUDIT-FIXES.md) cover provider routing, settings/service ownership, stream outcomes, diagnostics and bounded journaling.
+
 | Check | Evidence and boundary |
 | :--- | :--- |
 | Linux · macOS · Windows | [CI](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml): build, lint, protocol and recovery tests |
@@ -142,7 +144,7 @@ Muse is an experimental helper, not a verified integration. It requires `default
 
 ShrinkGate binds loopback and forwards requests to your configured provider. It adds no telemetry or extra forwarding destination. It is intended for a trusted, single-user workstation.
 
-Prompts and auth headers are not journaled. Usage metadata stays local. Recovery snapshots can contain secrets already present in your agent settings; protect them and avoid sharing dry-run output.
+Prompts and auth headers are not journaled. Usage metadata stays local. Observed usage from failed or cancelled requests remains visible separately from estimated reductions. Recovery snapshots can contain secrets already present in your agent settings; protect them and avoid sharing dry-run output.
 
 [Configuration, limits & Docker](docs/OPERATIONS.md) · [Security & privacy](SECURITY.md) · [Audit findings](docs/AUDIT.md)
 

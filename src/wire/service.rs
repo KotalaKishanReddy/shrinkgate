@@ -35,7 +35,7 @@ WantedBy=default.target
         crate::paths::systemd_unit_path()
     }
 
-    pub fn installed() -> bool {
+    fn file_exists() -> bool {
         service_file_path().exists()
     }
 
@@ -46,7 +46,8 @@ WantedBy=default.target
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        if std::fs::write(&path, UNIT).is_err() {
+        if let Err(e) = super::write_managed(&path, UNIT) {
+            eprintln!("shrinkgate: service kept: {e:#}");
             return false;
         }
         systemctl(&["daemon-reload"]) && systemctl(&["enable", "--now", "shrinkgate.service"])
@@ -54,16 +55,16 @@ WantedBy=default.target
 
     /// Starts the service if installed. Returns true when the service was
     /// started (or was already running).
-    pub fn start() -> bool {
-        if !installed() {
+    pub fn start_command() -> bool {
+        if !file_exists() {
             return false;
         }
         systemctl(&["start", "shrinkgate.service"])
     }
 
     /// Stops, disables and removes the unit file. Best-effort.
-    pub fn remove() {
-        if !installed() {
+    pub fn remove_command() {
+        if !file_exists() {
             return;
         }
         let _ = systemctl(&["disable", "--now", "shrinkgate.service"]);
@@ -84,7 +85,7 @@ mod platform {
         crate::paths::launchd_plist_path()
     }
 
-    pub fn installed() -> bool {
+    fn file_exists() -> bool {
         service_file_path().exists()
     }
 
@@ -140,7 +141,8 @@ mod platform {
             out = xml_escape(&out_log.to_string_lossy())
         );
 
-        if std::fs::write(&path, plist).is_err() {
+        if let Err(e) = super::write_managed(&path, &plist) {
+            eprintln!("shrinkgate: service kept: {e:#}");
             return false;
         }
         let _ = std::process::Command::new("launchctl")
@@ -155,8 +157,8 @@ mod platform {
             .unwrap_or(false)
     }
 
-    pub fn start() -> bool {
-        if !installed() {
+    pub fn start_command() -> bool {
+        if !file_exists() {
             return false;
         }
         std::process::Command::new("launchctl")
@@ -166,8 +168,8 @@ mod platform {
             .unwrap_or(false)
     }
 
-    pub fn remove() {
-        if !installed() {
+    pub fn remove_command() {
+        if !file_exists() {
             return;
         }
         let path = service_file_path();
@@ -191,16 +193,13 @@ mod platform {
     pub fn service_file_path() -> PathBuf {
         PathBuf::new()
     }
-    pub fn installed() -> bool {
-        false
-    }
     pub fn install(_bin: &Path) -> bool {
         false
     }
-    pub fn start() -> bool {
+    pub fn start_command() -> bool {
         false
     }
-    pub fn remove() {}
+    pub fn remove_command() {}
     #[cfg(target_os = "windows")]
     pub fn description() -> &'static str {
         "detached background process (Windows)"
@@ -212,4 +211,77 @@ mod platform {
     }
 }
 
-pub use platform::*;
+pub use platform::{description, service_file_path};
+
+/// Ownership is recorded separately from agent settings. An existing service
+/// without this snapshot is user-owned, even if its contents look identical.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn write_managed(path: &Path, text: &str) -> anyhow::Result<()> {
+    let state = crate::wire::read_state("service")?;
+    if let Some(ref state) = state {
+        anyhow::ensure!(
+            state["path"].as_str() == path.to_str(),
+            "service recovery path differs; resolve it manually"
+        );
+    }
+    if path.exists() {
+        anyhow::ensure!(
+            state
+                .as_ref()
+                .is_some_and(
+                    |s| crate::wire::read_optional(path).ok().flatten().as_deref()
+                        == s["written"].as_str()
+                ),
+            "existing or externally edited service is not owned by this connection"
+        );
+    }
+    crate::wire::persist_connection(
+        "service",
+        path,
+        text,
+        &serde_json::json!({
+            "version": 1, "path": path.to_string_lossy(), "written": text, "original": null,
+        }),
+    )
+}
+
+pub fn ownership_issue() -> Option<String> {
+    match crate::wire::read_state("service") {
+        Ok(None) => None,
+        Ok(Some(state)) => {
+            let path = service_file_path();
+            if state["path"].as_str() == path.to_str()
+                && crate::wire::read_optional(&path).ok().flatten().as_deref()
+                    == state["written"].as_str()
+            {
+                None
+            } else {
+                Some("managed service changed or is missing; file/recovery data kept".into())
+            }
+        }
+        Err(e) => Some(format!("invalid service recovery state: {e}")),
+    }
+}
+
+pub fn installed() -> bool {
+    crate::wire::wire_state_file("service").exists() && ownership_issue().is_none()
+}
+
+pub fn install(bin: &Path) -> bool {
+    platform::install(bin)
+}
+pub fn start() -> bool {
+    installed() && platform::start_command()
+}
+pub fn remove() {
+    if !installed() {
+        if let Some(problem) = ownership_issue() {
+            eprintln!("shrinkgate: {problem}");
+        }
+        return;
+    }
+    platform::remove_command();
+    if !service_file_path().exists() {
+        let _ = std::fs::remove_file(crate::wire::wire_state_file("service"));
+    }
+}

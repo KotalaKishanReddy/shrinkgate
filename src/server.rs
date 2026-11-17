@@ -15,7 +15,6 @@ use hyper::{HeaderMap, Method, Request, Response, Uri};
 use hyper_util::rt::TokioIo;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
@@ -27,10 +26,10 @@ use crate::paths;
 use crate::shrink::{
     anthropic as sh_anthropic, openai as sh_openai, responses as sh_responses, ShrinkStat,
 };
-use crate::store::{journal, usage_from_json, Record, Usage};
+use crate::store::{usage_from_json, Journal, Record, Usage};
 use crate::upstream::{
     forward_req_headers, forward_resp_headers, full, hyper_stream, make_client, BoxBody, BoxError,
-    TapBody, UpstreamClient,
+    StreamOutcome, TapBody, UpstreamClient,
 };
 
 const MAX_BODY: usize = 16 << 20; // request bodies we transform
@@ -39,7 +38,7 @@ const MAX_RESP: usize = 64 << 20; // response bodies we buffer for usage taps
 pub struct AppState {
     pub cfg: Config,
     pub clt: UpstreamClient,
-    pub state_dir: PathBuf,
+    pub journal: Journal,
 }
 
 pub type St = Arc<AppState>;
@@ -51,7 +50,7 @@ pub async fn run(cfg: Config, quiet: bool) -> anyhow::Result<()> {
     Config::write_default_example(&cfg_dir);
     let state = Arc::new(AppState {
         clt: make_client(),
-        state_dir: paths::state_dir(),
+        journal: Journal::new(paths::state_dir())?,
         cfg: cfg.clone(),
     });
     if !quiet {
@@ -105,6 +104,13 @@ pub async fn serve(listener: TcpListener, state: St) -> anyhow::Result<()> {
     })
     .await;
     connections.abort_all();
+    while connections.join_next().await.is_some() {}
+    if tokio::time::timeout(Duration::from_secs(5), state.journal.flush())
+        .await
+        .is_err()
+    {
+        eprintln!("shrinkgate: journal flush timed out; pending metadata may be lost");
+    }
     Ok(())
 }
 
@@ -233,6 +239,9 @@ fn health(st: &St) -> Response<BoxBody> {
         "version": env!("CARGO_PKG_VERSION"),
         "shrink": st.cfg.shrink,
         "port": st.cfg.port,
+        "health_protocol": 2,
+        "config_fingerprint": st.cfg.fingerprint(),
+        "journal_dropped_records": st.journal.dropped(),
     });
     Response::builder()
         .status(200)
@@ -309,7 +318,13 @@ struct Pending {
     started: Instant,
 }
 
-fn finish_with_usage(st: &St, p: &Pending, status: u16, usage: Option<Usage>) {
+fn finish_with_usage(
+    st: &St,
+    p: &Pending,
+    status: u16,
+    usage: Option<Usage>,
+    stream_outcome: Option<&'static str>,
+) {
     let rec = Record {
         route: p.route,
         session: p.session.clone(),
@@ -320,9 +335,9 @@ fn finish_with_usage(st: &St, p: &Pending, status: u16, usage: Option<Usage>) {
         status,
         ms: p.started.elapsed().as_millis(),
         usage,
+        stream_outcome,
     };
-    let dir = st.state_dir.clone();
-    tokio::task::spawn_blocking(move || journal(&dir, &rec));
+    st.journal.submit(rec);
 }
 
 /// Sends the transformed request upstream and returns the tap/forward response.
@@ -353,8 +368,14 @@ async fn send_transformed(
         let usage_cell = Arc::new(std::sync::Mutex::new(None::<Usage>));
         let st2 = st.clone();
         let p2 = pending.clone();
-        let on_end = Box::new(move |usage: Option<Usage>, complete: bool| {
-            finish_with_usage(&st2, &p2, if complete { status } else { 499 }, usage);
+        let on_end = Box::new(move |usage: Option<Usage>, outcome: StreamOutcome| {
+            finish_with_usage(
+                &st2,
+                &p2,
+                outcome.journal_status(status),
+                usage,
+                Some(outcome.as_str()),
+            );
         });
         let body = TapBody::new(hyper_stream(up_body.into_data_stream()), usage_cell, on_end);
         let mut rb = Response::builder().status(status);
@@ -372,7 +393,7 @@ async fn send_transformed(
         let usage = serde_json::from_slice::<Value>(&bytes)
             .ok()
             .and_then(|v| usage_from_json(&v));
-        finish_with_usage(st, &pending, status, usage);
+        finish_with_usage(st, &pending, status, usage, None);
         let mut rb = Response::builder().status(status);
         if let Some(hm) = rb.headers_mut() {
             for (k, v) in headers_out.iter() {
@@ -388,12 +409,22 @@ async fn send_transformed(
 // Routes
 // ---------------------------------------------------------------------------
 
-fn anthropic_base(st: &St, parts: &Parts) -> String {
-    match force_upstream(&parts.headers).as_deref() {
-        Some("openai") => st.cfg.upstream_openai.clone(),
-        Some("meta") => st.cfg.upstream_meta.clone(),
-        _ => st.cfg.upstream_anthropic.clone(),
+fn provider_base(st: &St, provider: &str) -> String {
+    match provider {
+        "anthropic" => st.cfg.upstream_anthropic.clone(),
+        "meta" => st.cfg.upstream_meta.clone(),
+        "opencode" => st.cfg.upstream_opencode.clone(),
+        _ => st.cfg.upstream_openai.clone(),
     }
+}
+
+fn anthropic_base(st: &St, parts: &Parts) -> String {
+    provider_base(
+        st,
+        force_upstream(&parts.headers)
+            .as_deref()
+            .unwrap_or("anthropic"),
+    )
 }
 
 async fn messages(
@@ -431,12 +462,12 @@ async fn messages(
 }
 
 fn openai_base(st: &St, parts: &Parts) -> String {
-    match force_upstream(&parts.headers).as_deref() {
-        Some("anthropic") => st.cfg.upstream_anthropic.clone(),
-        Some("meta") => st.cfg.upstream_meta.clone(),
-        Some("opencode") => st.cfg.upstream_opencode.clone(),
-        _ => st.cfg.upstream_openai.clone(),
-    }
+    provider_base(
+        st,
+        force_upstream(&parts.headers)
+            .as_deref()
+            .unwrap_or(&st.cfg.default_upstream),
+    )
 }
 
 async fn chat_completions(
@@ -472,23 +503,16 @@ async fn chat_completions(
     send_transformed(&st, parts, url, out, pending).await
 }
 
-/// Codex ChatGPT login rides a JWT + `chatgpt-account-id` header; route those
+/// Codex ChatGPT login supplies a `chatgpt-account-id` header; route those
 /// to the ChatGPT backend with the `/v1` prefix stripped. Everything else goes
 /// to the configured OpenAI-compatible upstream.
 fn responses_upstream(st: &St, parts: &Parts) -> (String, String) {
-    if force_upstream(&parts.headers).is_some() {
+    if force_upstream(&parts.headers).is_some() || st.cfg.default_upstream != "openai" {
         return (openai_base(st, parts), "explicit".into());
     }
-    let auth = parts
-        .headers
-        .get(hyper::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let jwt = auth
-        .strip_prefix("Bearer ")
-        .map(|t| t.starts_with("eyJ"))
-        .unwrap_or(false);
-    let chatgpt = parts.headers.contains_key("chatgpt-account-id") || jwt;
+    // Token shape is not provider identity. Only the account header selects
+    // the ChatGPT backend; an explicit provider/default always takes precedence.
+    let chatgpt = parts.headers.contains_key("chatgpt-account-id");
     if chatgpt {
         return (
             st.cfg.upstream_chatgpt.trim_end_matches('/').to_string(),
@@ -533,21 +557,17 @@ async fn responses(parts: Parts, body: Incoming, st: St) -> Result<Response<BoxB
 /// Anything else: pure reverse proxy to the guessed upstream.
 async fn passthrough(parts: Parts, body: Incoming, st: St) -> Result<Response<BoxBody>, BoxError> {
     let path = parts.uri.path().to_string();
-    let base = if force_upstream(&parts.headers).as_deref() == Some("meta") {
-        st.cfg.upstream_meta.clone()
-    } else if force_upstream(&parts.headers).as_deref() == Some("opencode") {
-        st.cfg.upstream_opencode.clone()
+    let base = if let Some(provider) = force_upstream(&parts.headers) {
+        provider_base(&st, &provider)
     } else if path.starts_with("/v1/messages") || path.starts_with("/v1/complete") {
-        anthropic_base(&st, &parts)
-    } else if parts.headers.contains_key("chatgpt-account-id") && path.starts_with("/v1/") {
+        st.cfg.upstream_anthropic.clone()
+    } else if st.cfg.default_upstream == "openai"
+        && parts.headers.contains_key("chatgpt-account-id")
+        && path.starts_with("/v1/")
+    {
         st.cfg.upstream_chatgpt.clone()
     } else {
-        match st.cfg.default_upstream.as_str() {
-            "anthropic" => st.cfg.upstream_anthropic.clone(),
-            "meta" => st.cfg.upstream_meta.clone(),
-            "opencode" => st.cfg.upstream_opencode.clone(),
-            _ => st.cfg.upstream_openai.clone(),
-        }
+        provider_base(&st, &st.cfg.default_upstream)
     };
     let pq = path_and_query(&parts);
     let path = if base == st.cfg.upstream_chatgpt {
@@ -589,7 +609,7 @@ mod tests {
         let state = Arc::new(AppState {
             cfg,
             clt: make_client(),
-            state_dir: dir.path().to_path_buf(),
+            journal: Journal::new(dir.path().to_path_buf()).unwrap(),
         });
         let handle = tokio::spawn(async move {
             serve(listener, state).await.unwrap();
@@ -633,15 +653,17 @@ mod tests {
         task.abort();
     }
     #[test]
-    fn explicit_upstream_overrides_jwt_guessing() {
+    fn explicit_upstream_overrides_chatgpt_account_routing() {
         let cfg = Config::default();
+        let temp = tempfile::tempdir().unwrap();
         let st = Arc::new(AppState {
             cfg: cfg.clone(),
             clt: make_client(),
-            state_dir: PathBuf::new(),
+            journal: Journal::new(temp.path().to_path_buf()).unwrap(),
         });
         let (parts, _) = Request::builder()
             .header("authorization", "Bearer eyJtest")
+            .header("chatgpt-account-id", "fixture-account")
             .header("x-shrinkgate-upstream", "meta")
             .body(())
             .unwrap()
@@ -706,7 +728,7 @@ mod protocol_tests {
         let state = Arc::new(AppState {
             cfg,
             clt: make_client(),
-            state_dir: dir.path().to_path_buf(),
+            journal: Journal::new(dir.path().to_path_buf()).unwrap(),
         });
         let engine = tokio::spawn(async move {
             serve(listener, state).await.unwrap();
@@ -751,5 +773,204 @@ mod protocol_tests {
         drop(captured);
         engine.abort();
         mock.abort();
+    }
+}
+
+#[cfg(test)]
+mod audit_regressions {
+    use super::*;
+    use crate::benchmark::fixture;
+    use std::sync::Mutex;
+
+    async fn backend(
+        body: &'static [u8],
+        hits: Arc<Mutex<Vec<(String, String)>>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let task = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let hits = hits.clone();
+                tokio::spawn(async move {
+                    let service = service_fn(move |req: Request<Incoming>| {
+                        let hits = hits.clone();
+                        async move {
+                            hits.lock().unwrap().push((
+                                req.uri().path().into(),
+                                req.headers()
+                                    .get("authorization")
+                                    .unwrap()
+                                    .to_str()
+                                    .unwrap()
+                                    .into(),
+                            ));
+                            let _ = req.into_body().collect().await.unwrap();
+                            Ok::<_, std::convert::Infallible>(
+                                Response::builder()
+                                    .header(CONTENT_TYPE, "text/event-stream")
+                                    .header("connection", "close")
+                                    .body(full(Bytes::from_static(body)))
+                                    .unwrap(),
+                            )
+                        }
+                    });
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(socket), service)
+                        .await;
+                });
+            }
+        });
+        (base, task)
+    }
+
+    async fn request(port: u16, path: &str, provider: Option<&str>, body: Value) -> (u16, Bytes) {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(format!("http://127.0.0.1:{port}{path}"))
+            .header("authorization", "Bearer eyJ-local-fixture")
+            .header(CONTENT_TYPE, "application/json");
+        if let Some(provider) = provider {
+            builder = builder.header("x-shrinkgate-upstream", provider);
+        }
+        let response = make_client()
+            .request(
+                builder
+                    .body(full(serde_json::to_vec(&body).unwrap().into()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        (
+            status,
+            response.into_body().collect().await.unwrap().to_bytes(),
+        )
+    }
+
+    #[tokio::test]
+    async fn meta_default_and_explicit_overrides_never_leak_auth_to_other_backend() {
+        let openai_hits = Arc::new(Mutex::new(Vec::new()));
+        let meta_hits = Arc::new(Mutex::new(Vec::new()));
+        let (openai, openai_task) = backend(b"data: [DONE]\n\n", openai_hits.clone()).await;
+        let (meta, meta_task) = backend(b"data: [DONE]\n\n", meta_hits.clone()).await;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            port,
+            default_upstream: "meta".into(),
+            upstream_openai: openai,
+            upstream_meta: meta,
+            ..Config::default()
+        };
+        let state = Arc::new(AppState {
+            cfg,
+            clt: make_client(),
+            journal: Journal::new(dir.path().to_path_buf()).unwrap(),
+        });
+        let engine_state = state.clone();
+        let task = tokio::spawn(async move {
+            serve(listener, engine_state).await.unwrap();
+        });
+        for path in ["/v1/responses", "/v1/chat/completions", "/v1/models"] {
+            assert_eq!(
+                request(
+                    port,
+                    path,
+                    None,
+                    json!({"model":"fixture","input":[],"messages":[]})
+                )
+                .await
+                .0,
+                200
+            );
+        }
+        assert_eq!(meta_hits.lock().unwrap().len(), 3);
+        assert!(openai_hits.lock().unwrap().is_empty());
+        assert_eq!(
+            request(port, "/v1/responses", Some("openai"), json!({"input":[]}))
+                .await
+                .0,
+            200
+        );
+        assert_eq!(openai_hits.lock().unwrap().len(), 1);
+        assert!(meta_hits
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, auth)| auth == "Bearer eyJ-local-fixture"));
+        state.journal.flush().await;
+        task.abort();
+        openai_task.abort();
+        meta_task.abort();
+    }
+
+    #[tokio::test]
+    async fn streamed_api_failure_is_forwarded_unchanged_and_never_earns_credit() {
+        const BODY: &[u8] = b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":123}}}\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}\n\n";
+        let (upstream, mock) = backend(BODY, Arc::new(Mutex::new(Vec::new()))).await;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            port,
+            upstream_anthropic: upstream,
+            ..Config::default()
+        };
+        let state = Arc::new(AppState {
+            cfg,
+            clt: make_client(),
+            journal: Journal::new(dir.path().to_path_buf()).unwrap(),
+        });
+        let st = state.clone();
+        let engine = tokio::spawn(async move {
+            serve(listener, st).await.unwrap();
+        });
+        let text = "compiler output".repeat(200);
+        let (status, bytes) = request(
+            port,
+            "/v1/messages",
+            None,
+            fixture("anthropic", &[text.clone(), text.clone(), text]),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(&bytes[..], BODY);
+        state.journal.flush().await;
+        let report = crate::store::summary(dir.path());
+        assert_eq!(report["successful_requests"], 0);
+        assert_eq!(report["estimated_saved_tokens"], 0);
+        assert_eq!(report["failed_or_cancelled_requests"], 1);
+        assert_eq!(
+            report["provider_usage"]["failed_or_cancelled"]["input_tokens"],
+            123
+        );
+        engine.abort();
+        mock.abort();
+    }
+}
+
+#[cfg(test)]
+mod provider_identity_regression {
+    use super::*;
+    #[test]
+    fn jwt_shape_is_not_an_instruction_to_change_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            upstream_openai: "http://127.0.0.1:12345".into(),
+            ..Config::default()
+        };
+        let state = Arc::new(AppState {
+            cfg: cfg.clone(),
+            clt: make_client(),
+            journal: Journal::new(dir.path().to_path_buf()).unwrap(),
+        });
+        let (parts, _) = Request::builder()
+            .header("authorization", "Bearer eyJ-provider-token")
+            .body(())
+            .unwrap()
+            .into_parts();
+        assert_eq!(responses_upstream(&state, &parts).0, cfg.upstream_openai);
     }
 }
