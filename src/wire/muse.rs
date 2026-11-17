@@ -14,10 +14,9 @@ use crate::paths;
 use crate::wire::ensure_engine;
 
 fn muse_installed() -> bool {
-    std::env::var("PATH")
-        .unwrap_or_default()
-        .split(':')
-        .any(|dir| std::path::Path::new(dir).join("muse").exists())
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path_var)
+        .any(|dir| dir.join("muse").exists() || dir.join("muse.exe").exists())
 }
 
 pub async fn connect(cfg: &Config) -> anyhow::Result<()> {

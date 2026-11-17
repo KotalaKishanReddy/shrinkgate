@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/KotalaKishanReddy/shrinkgate?style=flat-square&color=blue&logo=github)](https://github.com/KotalaKishanReddy/shrinkgate/releases)
 [![Tests](https://img.shields.io/badge/tests-22%20passed-success?style=flat-square&logo=rust)](https://github.com/KotalaKishanReddy/shrinkgate/actions/workflows/ci.yml)
 [![Container](https://img.shields.io/badge/ghcr.io-docker-2496ED?style=flat-square&logo=docker)](https://github.com/KotalaKishanReddy/shrinkgate/pkgs/container/shrinkgate)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey?style=flat-square&logo=linux)](https://github.com/KotalaKishanReddy/shrinkgate)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square&logo=linux)](https://github.com/KotalaKishanReddy/shrinkgate)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg?style=flat-square)](LICENSE)
 
 A ~2.3 MB local daemon on `127.0.0.1:18793` that cuts your coding agent token costs and latency by deduplicating conversation history before it reaches LLM APIs. Streaming, prompt-cache friendly, 100% local.
@@ -27,7 +27,7 @@ Claude Code / Codex / OpenCode ──► ShrinkGate (127.0.0.1:18793) ──► 
 # 1. Install (via Cargo or prebuilt binary)
 cargo install shrinkgate
 
-# 2. Wire your agent (auto-starts background service on Linux/macOS)
+# 2. Wire your agent (auto-starts background service on Linux/macOS/Windows)
 shrinkgate connect claude    # Claude Code
 shrinkgate connect codex     # OpenAI Codex
 shrinkgate connect opencode  # OpenCode
@@ -39,16 +39,19 @@ shrinkgate status
 <details>
 <summary><b>Other install options (prebuilt binaries / docker)</b></summary>
 
-- **Prebuilt Binaries (Linux & macOS)** from [Releases](https://github.com/KotalaKishanReddy/shrinkgate/releases):
+- **Prebuilt Binaries (Linux, macOS & Windows)** from [Releases](https://github.com/KotalaKishanReddy/shrinkgate/releases):
   ```sh
   # macOS Apple Silicon (M1/M2/M3/M4)
-  curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.0-aarch64-macos.tar.gz | tar -xz && sudo mv shrinkgate /usr/local/bin/
+  curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.1-aarch64-macos.tar.gz | tar -xz && sudo mv shrinkgate /usr/local/bin/
 
   # Linux x86_64
-  curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.0-x86_64-linux.tar.gz | tar -xz && sudo mv shrinkgate /usr/local/bin/
+  curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.1-x86_64-linux.tar.gz | tar -xz && sudo mv shrinkgate /usr/local/bin/
 
   # macOS Intel x86_64
-  curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.0-x86_64-macos.tar.gz | tar -xz && sudo mv shrinkgate /usr/local/bin/
+  curl -sSL https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.1-x86_64-macos.tar.gz | tar -xz && sudo mv shrinkgate /usr/local/bin/
+
+  # Windows x86_64 (PowerShell)
+  Invoke-WebRequest -Uri https://github.com/KotalaKishanReddy/shrinkgate/releases/latest/download/shrinkgate-v0.1.1-x86_64-windows.zip -OutFile shrinkgate.zip; Expand-Archive shrinkgate.zip -DestinationPath $env:USERPROFILE\.local\bin
   ```
 - **Docker**:
   ```sh
@@ -62,7 +65,7 @@ shrinkgate status
 
 Coding agents re-send the entire conversation history on every turn. ShrinkGate intercepts outbound requests, SHA-256 fingerprints candidate payloads (tool results, file reads), and replaces re-sent duplicates with deterministic stubs while keeping the newest copy verbatim.
 
-- **Automated Test Suite**: **22 passed; 0 failed** across Linux & macOS (`cargo test --release`).
+- **Automated Test Suite**: **22 passed; 0 failed** across Linux, macOS, and Windows (`cargo test --release`).
 - **40–70% token savings** across multi-turn sessions with prompt cache preservation.
 - **Zero data egress**: Strictly binds to `127.0.0.1`, auth headers forwarded untouched over TLS.
 - **Untouched guarantees**: System prompts, tool schemas, thinking traces, and media are never modified.
@@ -94,7 +97,7 @@ Total savings: −3,326 tokens (~40% context trimmed, prompt-cache friendly)
 
 | Command | Description |
 | :--- | :--- |
-| `serve [--port 18793]` | Run background engine (`launchd` on macOS, `systemd` on Linux) |
+| `serve [--port 18793]` | Run background engine (`launchd` on macOS, `systemd` on Linux, detached on Windows) |
 | `connect <agent>` | Wire an agent (`claude`, `codex`, `opencode`, `muse`) |
 | `status [agent]` | Check engine health, wiring state, and token savings |
 | `uninstall <agent>` | Restore agent's original settings (`--purge` removes binary & state) |

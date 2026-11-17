@@ -48,6 +48,8 @@ pub fn ensure_bin() -> anyhow::Result<PathBuf> {
         }
         let tmp = dst.with_extension("tmp");
         std::fs::copy(&src, &tmp)?;
+        #[cfg(windows)]
+        let _ = std::fs::remove_file(&dst);
         std::fs::rename(&tmp, &dst)?;
     }
     #[cfg(unix)]
@@ -96,6 +98,7 @@ pub async fn ensure_engine(cfg: &Config) -> anyhow::Result<bool> {
     Ok(false)
 }
 
+#[cfg(unix)]
 pub fn spawn_detached_serve() {
     use std::os::unix::process::CommandExt;
     let Ok(exe) = std::env::current_exe() else {
@@ -107,6 +110,36 @@ pub fn spawn_detached_serve() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .process_group(0)
+        .spawn();
+}
+
+#[cfg(windows)]
+pub fn spawn_detached_serve() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let _ = std::process::Command::new(exe)
+        .args(["serve", "--quiet"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .spawn();
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn spawn_detached_serve() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let _ = std::process::Command::new(exe)
+        .args(["serve", "--quiet"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn();
 }
 

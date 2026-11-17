@@ -1,9 +1,9 @@
 [package]
 name = "shrinkgate"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.85"
-description = "ShrinkGate — a local context-shrinking gateway for coding agents (Claude Code, Codex, OpenCode, Muse Code, ...). Linux & macOS alternative to ContextShrink Code."
+description = "ShrinkGate — a local context-shrinking gateway for coding agents (Claude Code, Codex, OpenCode, Muse Code, ...). Linux, macOS & Windows alternative to ContextShrink Code."
 license = "Apache-2.0"
 repository = "https://github.com/KotalaKishanReddy/shrinkgate"
 homepage = "https://github.com/KotalaKishanReddy/shrinkgate"

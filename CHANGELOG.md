@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.1] - 2026-11-17
+
+### Added
+- **Full Windows Support**: Cross-platform compatibility for Windows (x86_64 MSVC / GNU):
+  - Path normalization with `USERPROFILE`, `.exe` extensions, and Windows directory separators.
+  - Semicolon-delimited `PATH` resolution for binary discovery (`muse.exe`).
+  - Windows detached background process spawning with `CREATE_NO_WINDOW` and `DETACHED_PROCESS` flags.
+  - Windows atomic file overwriting for binary installation.
+- **Prebuilt Windows Binaries**: Automated `.zip` and `.tar.gz` packaging for `x86_64-pc-windows-msvc` on GitHub Releases.
+- **Continuous Integration**: Added `windows-latest` matrix runner to CI.
+
 ## [0.1.0] - 2026-11-17
 
 ### Added

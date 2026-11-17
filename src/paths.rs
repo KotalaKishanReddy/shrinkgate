@@ -5,7 +5,10 @@
 use std::path::{Path, PathBuf};
 
 fn home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+    std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| ".".into())
 }
 
 fn base_dir(env: &str, fallback: &str) -> PathBuf {
@@ -60,9 +63,16 @@ pub fn opencode_config() -> PathBuf {
         .join("opencode.json")
 }
 
-/// Where `connect` installs the binary that hooks and the systemd unit call.
+/// Where `connect` installs the binary that hooks and the service call.
 pub fn bin_install_path() -> PathBuf {
-    home().join(".local/bin/shrinkgate")
+    #[cfg(windows)]
+    {
+        home().join(".local").join("bin").join("shrinkgate.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        home().join(".local/bin/shrinkgate")
+    }
 }
 
 #[allow(dead_code)]
@@ -79,7 +89,7 @@ pub fn expand_tilde(p: &str) -> PathBuf {
     if p == "~" {
         return home();
     }
-    if let Some(rest) = p.strip_prefix("~/") {
+    if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
         return home().join(rest);
     }
     PathBuf::from(p)

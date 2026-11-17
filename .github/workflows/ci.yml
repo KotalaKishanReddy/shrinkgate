@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-latest]
+        os: [ubuntu-24.04, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -26,5 +26,9 @@ jobs:
         run: cargo build --release
       - name: Run unit & integration tests
         run: cargo test --release
-      - name: End-to-end integration demo
+      - name: End-to-end integration demo (Unix)
+        if: runner.os != 'Windows'
         run: ./target/release/shrinkgate demo
+      - name: End-to-end integration demo (Windows)
+        if: runner.os == 'Windows'
+        run: .\target\release\shrinkgate.exe demo

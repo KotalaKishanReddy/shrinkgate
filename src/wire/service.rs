@@ -179,6 +179,7 @@ mod platform {
 mod platform {
     use super::*;
 
+    #[allow(dead_code)]
     pub fn service_file_path() -> PathBuf {
         PathBuf::new()
     }
@@ -192,6 +193,12 @@ mod platform {
         false
     }
     pub fn remove() {}
+    #[cfg(target_os = "windows")]
+    pub fn description() -> &'static str {
+        "detached background process (Windows)"
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     pub fn description() -> &'static str {
         "unsupported background service"
     }
